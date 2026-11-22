@@ -211,6 +211,7 @@ typedef int32_t (LIBRARY_ABI *EntryPoint)(void* module, uint32_t reason, void* r
 
 static uint8_t LibraryPEB[PEB_SIZE] __attribute__((aligned(64)));
 static pthread_key_t LibraryKey;
+static int LibraryKeyError;
 static pthread_once_t LibraryOnce = PTHREAD_ONCE_INIT;
 
 // Global state changes (a module with TLS loaded or freed, a module attached) bump the generation, every thread
@@ -339,7 +340,7 @@ static void InitializeEnvironment(void)
   *(uint16_t*)(LibraryPEB + PEB_OS_BUILD_NUMBER)      = 19045;
   *(uint32_t*)(LibraryPEB + PEB_OS_PLATFORM_ID)       = 2;      // VER_PLATFORM_WIN32_NT
 
-  pthread_key_create(&LibraryKey, ReleaseTEB);
+  LibraryKeyError = pthread_key_create(&LibraryKey, ReleaseTEB);
 }
 
 int RegisterLibraryThreadExit(LibraryThreadExit function)
@@ -384,6 +385,11 @@ int PrepareLibraryThread(void)
 
   if (LibraryTEB == NULL)
   {
+    // Without the key the TEB could not be freed at the exit of the thread
+
+    if (LibraryKeyError != 0)
+      return -1;
+
     block  = (uint8_t*)calloc(1, TEB_SIZE);
     blocks = (void**)calloc(TLS_SLOT_COUNT, sizeof(void*));
 
@@ -414,14 +420,21 @@ int PrepareLibraryThread(void)
     WRITE64(block + TEB_TLS_POINTER, (uint64_t)blocks);
     WRITE64(block + TEB_PEB,         (uint64_t)LibraryPEB);
 
-    if (syscall(SYS_arch_prctl, ARCH_SET_GS, block) < 0)
+    if (pthread_setspecific(LibraryKey, block) != 0)
     {
       free(block);
       free(blocks);
       return -1;
     }
 
-    pthread_setspecific(LibraryKey, block);
+    if (syscall(SYS_arch_prctl, ARCH_SET_GS, block) < 0)
+    {
+      pthread_setspecific(LibraryKey, NULL);
+      free(block);
+      free(blocks);
+      return -1;
+    }
+
     LibraryTEB = block;
   }
 
