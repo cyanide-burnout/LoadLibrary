@@ -43,9 +43,11 @@ unexpected call is never silent.
 - error codes for failures, a list of unresolved imports, names for addresses
   inside DLLs (`A.dll+0x1003 (Twice+0x3)`) that are safe in a fault handler;
 - messages through a function with the signature of `syslog(3)`;
-- observers of loads and unloads, and `SymbolBridge.c` on top of them: the
-  `.pdata` of DLLs translated into DWARF CFI for libgcc and libunwind, so
-  backtraces of fault handlers pass through DLL frames, epilogues included.
+- observers of loads and unloads, and two of them on top: `FrameBridge.c`
+  translates the `.pdata` of DLLs into DWARF CFI for libgcc and libunwind, so
+  backtraces of fault handlers pass through DLL frames, epilogues included;
+  `SymbolBridge.c` puts each image inside an ELF object of ld.so, so `dladdr`,
+  `dlsym` and `dl_iterate_phdr` name its functions.
 
 ## Where the line is
 
@@ -96,9 +98,10 @@ The full example is `Examples/Call.c`.
 - `Tools/loadlibrary-check [--attach] library.dll` loads the DLL with the real
   loader and tells why it fails, what stays unresolved (grouped by the side of
   the line), and with `--attach` whether `DllMain` passes.
-- `Loader/SymbolBridge.c` is optional: link its object like `Kernel32.o` and
-  traces of `backtrace()`, `_Unwind_Backtrace` and libunwind go through DLL
-  frames.
+- `Loader/FrameBridge.c` and `Loader/SymbolBridge.c` are optional: link their
+  objects like `Kernel32.o`, and the usual `backtrace()`, `_Unwind_Backtrace`,
+  libunwind and `dladdr` of a fault handler go through DLL frames and name
+  them.
 - `Tools/LibraryCheck.py library.dll [export ...]` walks the call graph from
   the exports you need (with `objdump`) and lists the imports and TEB fields
   they reach, so error paths can be told from normal work.

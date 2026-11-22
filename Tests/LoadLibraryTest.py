@@ -20,7 +20,7 @@
 #          a TLS callback and DllMain, both report to TEST.dll!Note(who, reason): callback 1, DllMain 2
 #   W.dll  imports U!GetTls, DllMain reports as 3
 #   V.dll  DllMain reports as 4 and returns FALSE
-#   X.dll  unwind information (.pdata/.xdata) for SymbolBridgeTest.c: Outer(callback, value) has a frame pointer,
+#   X.dll  unwind information (.pdata/.xdata) for FrameBridgeTest.c: Outer(callback, value) has a frame pointer,
 #          pushes, a save by MOV and a dynamic allocation only the frame pointer describes, and calls Middle(),
 #          whose body is a chained fragment calling callback(value); Trap() is a leaf without .pdata (ud2)
 #
@@ -438,7 +438,7 @@ def main():
     note(code, 4, 0)
     images['V.dll'] = build('V.dll', 0x10000000, code, {'TEST.dll': ['Note']}, [('DllMain', ('code', 'DllMain'))], {}, entry_point='DllMain')
 
-    # X.dll: unwind information for SymbolBridgeTest.c
+    # X.dll: unwind information for FrameBridgeTest.c
 
     code = Code()
     code.label('Outer')

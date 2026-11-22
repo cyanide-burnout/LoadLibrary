@@ -39,12 +39,13 @@ of what a DLL may need and what it would take, not as work to do.
 
 ### Diagnostics
 
-- **Names of DLL frames for `dladdr`.** SymbolBridge makes traces pass through
-  DLL frames, names come from `GetLibraryAddressName`, which a fault handler of
-  the host calls. `dladdr` and `dl_iterate_phdr` do not see the images. Fix: an
-  ELF wrapper in a memfd opened by `dlopen` (one `PT_LOAD` of `SizeOfImage`,
-  `.dynsym` from the exports, the same `.eh_frame`), with the image mapped
-  inside it; it needs a hook of the loader for the memory of an image.
-- **Debuggers and profilers.** gdb and perf do not know the images. Fix: the
-  GDB JIT interface (`__jit_debug_register_code`) with an ELF in memory
-  (symbols of the exports and the same CFI), and `/tmp/perf-PID.map` lines.
+- **gdb unwinding through DLL frames.** gdb sees the objects of SymbolBridge
+  (names), but not the CFI FrameBridge registers in the unwinders of the
+  process. Fix: SymbolBridge puts the same `.eh_frame` with `PT_GNU_EH_FRAME`
+  into its object; with both linked, FrameBridge then has nothing to register.
+- **perf.** It reads the memfd by name after the process is gone. Fix:
+  `/tmp/perf-PID.map` lines for the symbols.
+- **Names of leaves.** Leaf functions without `.pdata` that are not exported
+  have no symbol: their extent is unknown without disassembly.
+- **The name of the object.** `dli_fname` is `/proc/self/fd/N`; the name of
+  the DLL is in `DT_SONAME` only.

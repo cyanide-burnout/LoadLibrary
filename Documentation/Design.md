@@ -11,9 +11,11 @@ Files:
 | `Loader/LoadLibrary.h` | API: `LoadLibrary`, `GetProcAddress` (also by `LIBRARY_ORDINAL`), `FreeLibrary`, `PatchLibrary`, `PrepareLibraryThread`, `AttachLibrary`, `GetLibraryLastError`, `GetLibraryUnresolvedImports`, `GetLibraryAddressName`, providers (`LIBRARY_PROVIDER`, `LIBRARY_IMPORT`, `RegisterLibraryProvider`, `FindLibraryImport`), observers (`LIBRARY_OBSERVER`, `RegisterLibraryObserver`) |
 | `Loader/LoadLibrary.c` | Loader: mapping, relocations, imports, exports, protections, TEB, TLS, registries of providers and modules |
 | `Loader/Kernel32.c` | KERNEL32.dll functions on top of Linux, the provider registers itself (no header: nothing refers to it) |
-| `Loader/SymbolBridge.c` | Optional observer: unwind information of DLLs (`.pdata`) translated into DWARF CFI for libgcc and libunwind, so traces pass through DLL frames |
+| `Loader/FrameBridge.c` | Optional observer: unwind information of DLLs (`.pdata`) translated into DWARF CFI for libgcc and libunwind, so traces pass through DLL frames |
+| `Loader/SymbolBridge.c` | Optional observer: each image inside an ELF object of ld.so, so `dladdr`, `dlsym` and `dl_iterate_phdr` know it |
 | `Tests/Kernel32Test.c` | Calls the provider's functions through ms_abi pointers |
-| `Tests/SymbolBridgeTest.c` | Traces from a callback and from a signal handler through DLL frames, with libgcc, libunwind and a baseline without the bridge |
+| `Tests/FrameBridgeTest.c` | Traces from a callback and from a signal handler through DLL frames, with libgcc, libunwind and a baseline without the bridge |
+| `Tests/SymbolBridgeTest.c` | `dladdr`, `dlsym`, `dl_iterate_phdr` on wrapped images, a trace named by `dladdr` alone |
 | `Tests/LoadLibraryTest.py`, `Tests/LoadLibraryTest.c` | Generator of small test DLLs (no Windows toolchain needed) and the test of the loader on them |
 | `Tools/LibraryCheck.c`, `Tools/LibraryCheck.py` | `loadlibrary-check` (does the DLL load, what is unresolved, does `DllMain` pass) and the static check of what the needed exports reach |
 | `Examples/Call.c` | The smallest use: load a DLL, call an export |
@@ -255,26 +257,42 @@ crypto cores, where the caller allocates the context and the export works on it.
 | 32-bit DLL | Refused at load | Not possible in a 64-bit process |
 
 Backtraces of crashes stop at DLL frames: the DLL has `.pdata` but no DWARF.
-`SymbolBridge.c` closes that (below). `GetLibraryAddressName(address, buffer,
+`FrameBridge.c` and `SymbolBridge.c` close that (below). `GetLibraryAddressName(address, buffer,
 length)` names such an address as `A.dll+0x1003 (Twice+0x3)` (the nearest
 export), or `A.dll import thunk`. It does not allocate and only tries the
 lock, so a fault handler may call it.
 
-## Observers and SymbolBridge: traces through DLL frames
+## Observers: FrameBridge and SymbolBridge
 
 The loader knows nothing about debuggers and unwinders, as it knows nothing
-about emulated DLLs. An observer (`LIBRARY_OBSERVER`, or
-`RegisterLibraryObserver`) gets `LIBRARY_EVENT_LOADED` when a module is ready
-(relocated, bound and protected, before `LoadLibrary` returns it, for every
-dependency too) and `LIBRARY_EVENT_UNLOADING` before it is unmapped
-(`FreeLibrary` and the collector, cycles included), as `la_objopen` and
-`la_objclose` of rtld-audit. A failed load is not published. Registration
-replays the loaded modules, unregistration their unloading, so the order of
-constructors does not matter. Observers run with the lock of the loader held
-and must not load or free libraries.
+about emulated DLLs. Observers (`LIBRARY_OBSERVER`, or
+`RegisterLibraryObserver`) are a chain in the order of registration, process
+wide like the loader itself, as `la_objopen` and `la_objclose` of rtld-audit:
 
-`SymbolBridge.c` is such an observer. Linked like `Kernel32.c` (it registers
-itself, nothing refers to it), for every image it:
+- `LIBRARY_EVENT_MAPPING` before an image is mapped: the PE file is in
+  `image->file`, and an observer may provide the memory of the image (the
+  first one does, the rest see `image->base` set); images with stripped
+  relocations are not offered, they need their `ImageBase`;
+- `LIBRARY_EVENT_LOADED` when a module is ready (relocated, bound, protected,
+  before `LoadLibrary` returns it, for every dependency too);
+- `LIBRARY_EVENT_UNLOADING` before it goes away (`FreeLibrary` and the
+  collector, cycles included);
+- `LIBRARY_EVENT_UNMAPPING` to the observer that provided the memory, to take
+  it back (also after a load that failed).
+
+A failed load is not published. Registration replays the loaded modules,
+unregistration their unloading. Observers run with the lock of the loader
+held and must not load or free libraries.
+
+Two observers come with the loader. Each registers itself and nothing refers
+to it, as `Kernel32.c`: link the object and it works. They are independent,
+either or both can be linked, and a fault handler of the host needs nothing
+of the loader's API: its usual `_Unwind_Backtrace`, libunwind and `dladdr`
+see DLL frames.
+
+### FrameBridge: unwinding through DLL frames
+
+`FrameBridge.c` makes DLL frames unwindable. For every image it:
 
 1. reads `.pdata` and the `UNWIND_INFO` of each function (chained ones
    included) and translates the unwind codes into DWARF CFI: pushes, fixed
@@ -290,7 +308,7 @@ itself, nothing refers to it), for every image it:
 4. registers the `.eh_frame` it made in libgcc (`__register_frame`, then one
    lookup so libgcc sorts it now and not in a fault handler that may have
    interrupted `malloc`) and in libunwind (`_U_dyn_register` with a search
-   table), and removes both before the image is unmapped.
+   table next to the image), and removes both before the image is unmapped.
 
 Both unwinders are weak references: what the process does not have is
 skipped, and libunwind support is compiled in when its headers are there.
@@ -298,17 +316,49 @@ skipped, and libunwind support is compiled in when its headers are there.
 Not described: nonvolatile XMM registers (the System V caller does not keep
 them, and libunwind refuses DWARF registers above 16) and
 `UWOP_PUSH_MACHFRAME` (interrupt frames; its function gets no FDE, with a
-warning). Names of DLL frames come from `GetLibraryAddressName`: `dladdr`
-does not know the images.
+warning).
 
 libunwind (1.8) refuses the CFI GCC makes for an `ms_abi` function of the
 host, which saves xmm6–xmm15 (DWARF registers 17–32): its traces stop at such
 a function, for example a provider of `Kernel32.c` or a callback given to a
 DLL. libgcc passes through them.
 
-Checked on a real MSVC DLL with a profiling timer: every sample taken inside
-the DLL during encoding and decoding unwinds to the host, about 5000 samples
-for each unwinder; without SymbolBridge none does.
+### SymbolBridge: DLLs as objects of ld.so
+
+`SymbolBridge.c` makes images known to ld.so, so `dladdr`, `dlsym`,
+`dl_iterate_phdr`, gdb and perf see them. At `LIBRARY_EVENT_MAPPING` it builds
+a small ELF object in a memfd and opens it with `dlopen`:
+
+- the first `PT_LOAD` is the image itself: `SizeOfImage` of zeroes, readable
+  and writable; the loader puts the PE there and protects its sections as
+  usual;
+- the second `PT_LOAD` holds `.dynamic`, `.hash`, `.dynsym` and `.dynstr`:
+  the exports, and the functions of `.pdata` without a name as `dll+0x1040`,
+  with their sizes (`dladdr` of glibc matches a symbol of size 0 at its exact
+  address only); a chained fragment carries the name of its function;
+- `PT_GNU_STACK` keeps the stacks of the process not executable.
+
+ld.so runs nothing of it: no `DT_NEEDED`, no initializers. At
+`LIBRARY_EVENT_UNMAPPING` the object is closed. Its name for `dladdr`
+(`dli_fname`) is `/proc/self/fd/N` of the memfd, which stays open while the
+image lives, so a reader of that file finds a valid ELF there. The handle of
+`dlopen` is the `link_map` of the object in glibc, so
+`dladdr1(RTLD_DL_LINKMAP)` gives a handle for `dlsym`.
+
+Limits: leaf functions without `.pdata` have no name unless exported (the
+module and its base are still known); images with stripped relocations are
+mapped by the loader at their `ImageBase` and stay unknown to ld.so.
+`dlopen` runs with the lock of the loader held: a shared object that
+registers providers or observers in its constructors must not be opened while
+another thread loads DLLs, since that takes the two locks in the opposite
+order.
+
+### Checked on a real MSVC DLL
+
+A profiling timer interrupts encoding and decoding, the handler unwinds and
+names frames by `dladdr` only. Without the bridges no sample inside the DLL
+unwinds to the host; with them all of about 5000 samples do, with libgcc and
+with libunwind, and 97 % of the DLL frames get a name (the rest are leaves).
 
 ## Assessing a new DLL
 
@@ -535,11 +585,18 @@ The loader itself is tested on generated DLLs (`LoadLibraryTest.py`):
   image not attached;
 - observers: a module and its dependencies are published once, when ready,
   and withdrawn before unmapping; registration and unregistration replay;
-  a failed load is not published;
+  a failed load is not published; memory from an observer is used and given
+  back on free and after a load that failed, images with stripped relocations
+  are not offered;
 - non-PE and missing files.
 
-`SymbolBridgeTest.c` traces from a callback called by a DLL and from a signal
+`FrameBridgeTest.c` traces from a callback called by a DLL and from a signal
 handler (`ud2` in a leaf without `.pdata`) through a frame with a frame
 pointer and a dynamic allocation, and through chained unwind information, up
 to `main`: with libgcc, with libunwind, and as a baseline without the bridge,
-where the same traces must stop at the DLL.
+where the same traces must stop at the DLL. `SymbolBridgeTest.c` checks
+`dladdr` (an export, a chained fragment, a leaf), `dlsym` through the handle,
+`dl_iterate_phdr`, DLLs with dependencies and small section alignment working
+inside the objects, an image with stripped relocations mapped by the loader,
+the object gone after `FreeLibrary`, and a trace of libgcc named by `dladdr`
+alone.

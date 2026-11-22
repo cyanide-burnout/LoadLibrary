@@ -524,23 +524,42 @@ static void PublishModule(struct Module* image, int event)
     return;
 
   for (observer = Observers; observer != NULL; observer = observer->next)
-    observer->function(image, event);
+    observer->function(event, image);
 
   image->published = (event == LIBRARY_EVENT_LOADED);
 }
 
+// Called with LibraryLock: memory of the image from the first observer that provides it
+
+static void MapModule(struct Module* image)
+{
+  struct LibraryObserver* observer;
+
+  for (observer = Observers; observer != NULL; observer = observer->next)
+  {
+    observer->function(LIBRARY_EVENT_MAPPING, image);
+
+    if ((image->base   != NULL) &&
+        (image->mapper == NULL))
+      image->mapper = observer;
+  }
+}
+
 void RegisterLibraryObserver(struct LibraryObserver* observer)
 {
+  struct LibraryObserver** pointer;
   struct Module* image;
 
   pthread_mutex_lock(&LibraryLock);
 
-  observer->next = Observers;
-  Observers      = observer;
+  for (pointer = &Observers; *pointer != NULL; pointer = &(*pointer)->next);
+
+  observer->next = NULL;
+  *pointer       = observer;
 
   for (image = Modules; image != NULL; image = image->next)
     if (image->published != 0)
-      observer->function(image, LIBRARY_EVENT_LOADED);
+      observer->function(LIBRARY_EVENT_LOADED, image);
 
   pthread_mutex_unlock(&LibraryLock);
 }
@@ -560,7 +579,7 @@ void UnregisterLibraryObserver(struct LibraryObserver* observer)
 
       for (image = Modules; image != NULL; image = image->next)
         if (image->published != 0)
-          observer->function(image, LIBRARY_EVENT_UNLOADING);
+          observer->function(LIBRARY_EVENT_UNLOADING, image);
 
       break;
     }
@@ -1531,7 +1550,21 @@ struct Module* LoadLibrary(const char* path, const struct LibraryProvider* provi
     flags |= MAP_FIXED_NOREPLACE;
   }
 
-  base = (uint8_t*)mmap((flags & MAP_FIXED_NOREPLACE) ? (void*)preferred : NULL, image->size, PROT_READ | PROT_WRITE, flags, -1, 0);
+  base = MAP_FAILED;
+
+  if ((flags & MAP_FIXED_NOREPLACE) == 0)
+  {
+    // An observer may provide the memory (SymbolBridge.c maps the image inside an ELF object of ld.so)
+    image->file.data   = data;
+    image->file.length = status.st_size;
+    MapModule(image);
+    image->file.data   = NULL;
+    image->file.length = 0;
+    base          = (image->base != NULL) ? image->base : MAP_FAILED;
+  }
+
+  if (base == MAP_FAILED)
+    base = (uint8_t*)mmap((flags & MAP_FIXED_NOREPLACE) ? (void*)preferred : NULL, image->size, PROT_READ | PROT_WRITE, flags, -1, 0);
 
   if ((base != MAP_FAILED) &&
       (flags & MAP_FIXED_NOREPLACE) &&
@@ -1636,7 +1669,9 @@ static void DestroyModule(struct Module* image)
 {
   if (image->thunks != NULL)
     munmap(image->thunks, image->length);
-  if (image->base != NULL)
+  if (image->mapper != NULL)
+    image->mapper->function(LIBRARY_EVENT_UNMAPPING, image);
+  else if (image->base != NULL)
     munmap(image->base, image->size);
 
   free(image->dependencies);

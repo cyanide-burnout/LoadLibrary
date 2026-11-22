@@ -8,19 +8,19 @@ CFLAGS ?= -O2 -g
 override CFLAGS += -std=gnu99 -Wall -fPIC -ILoader
 
 OBJECTS = Loader/LoadLibrary.o Loader/Kernel32.o
-BRIDGE  = Loader/SymbolBridge.o
+BRIDGES = Loader/FrameBridge.o Loader/SymbolBridge.o
 TOOLS   = Tools/loadlibrary-check Examples/call
-TESTS   = Tests/loadlibrary-test Tests/kernel32-test Tests/symbolbridge-test Tests/symbolbridge-baseline
+TESTS   = Tests/loadlibrary-test Tests/kernel32-test Tests/framebridge-test Tests/framebridge-baseline Tests/symbolbridge-test
 DLLS    = Tests/DLL
 
-# SymbolBridge.o is optional, linked like Kernel32.o. It feeds libunwind too when the system has its headers;
-# then the test is also built against libunwind
+# FrameBridge.o (unwinding) and SymbolBridge.o (names for dladdr) are optional, linked like Kernel32.o. FrameBridge
+# feeds libunwind too when the system has its headers; then its test is also built against libunwind
 
 HASH      := \#
 LIBUNWIND := $(shell printf '$(HASH)include <libunwind-dynamic.h>\n' | $(CC) -E -x c - >/dev/null 2>&1 && echo yes)
-TESTS     += $(if $(LIBUNWIND),Tests/symbolbridge-libunwind)
+TESTS     += $(if $(LIBUNWIND),Tests/framebridge-libunwind)
 
-all: $(OBJECTS) $(BRIDGE) $(TOOLS)
+all: $(OBJECTS) $(BRIDGES) $(TOOLS)
 
 Loader/%.o: Loader/%.c Loader/LoadLibrary.h
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -37,14 +37,17 @@ Tests/loadlibrary-test: Tests/LoadLibraryTest.c $(OBJECTS)
 Tests/kernel32-test: Tests/Kernel32Test.c $(OBJECTS)
 	$(CC) $(CFLAGS) $^ -lpthread -o $@
 
-Tests/symbolbridge-test: Tests/SymbolBridgeTest.c $(OBJECTS) $(BRIDGE)
+Tests/framebridge-test: Tests/FrameBridgeTest.c $(OBJECTS) Loader/FrameBridge.o
 	$(CC) $(CFLAGS) -rdynamic $^ -ldl -lpthread -o $@
 
-Tests/symbolbridge-baseline: Tests/SymbolBridgeTest.c $(OBJECTS)
+Tests/framebridge-baseline: Tests/FrameBridgeTest.c $(OBJECTS)
 	$(CC) $(CFLAGS) -rdynamic -DBASELINE $^ -ldl -lpthread -o $@
 
-Tests/symbolbridge-libunwind: Tests/SymbolBridgeTest.c $(OBJECTS) $(BRIDGE)
+Tests/framebridge-libunwind: Tests/FrameBridgeTest.c $(OBJECTS) Loader/FrameBridge.o
 	$(CC) $(CFLAGS) -rdynamic -DWITH_LIBUNWIND $^ -lunwind -ldl -lpthread -o $@
+
+Tests/symbolbridge-test: Tests/SymbolBridgeTest.c $(OBJECTS) $(BRIDGES)
+	$(CC) $(CFLAGS) -rdynamic $^ -ldl -lpthread -o $@
 
 # Test DLLs are generated, no Windows toolchain is needed
 
@@ -56,12 +59,13 @@ check: all $(TESTS)
 	Tools/loadlibrary-check $(DLLS)/A.dll
 	! Tools/loadlibrary-check --attach $(DLLS)/V.dll
 	python3 Tools/LibraryCheck.py $(DLLS)/A.dll Twice Missing
-	Tests/symbolbridge-baseline $(DLLS)
+	Tests/framebridge-baseline $(DLLS)
+	Tests/framebridge-test $(DLLS)
+	$(if $(LIBUNWIND),Tests/framebridge-libunwind $(DLLS))
 	Tests/symbolbridge-test $(DLLS)
-	$(if $(LIBUNWIND),Tests/symbolbridge-libunwind $(DLLS))
 
 clean:
-	rm -f $(OBJECTS) $(BRIDGE) $(TOOLS) $(TESTS) Tests/symbolbridge-libunwind
+	rm -f $(OBJECTS) $(BRIDGES) $(TOOLS) $(TESTS) Tests/framebridge-libunwind
 	rm -f $(DLLS)/*.dll
 	-rmdir $(DLLS)
 

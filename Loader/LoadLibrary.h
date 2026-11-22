@@ -13,7 +13,7 @@ extern "C"
 // Minimal loader of PE32+ (x86-64) DLLs into a Linux process, see Documentation/Design.md
 // LoadLibrary() never runs code of a DLL, AttachLibrary() does. The loader knows nothing about emulated DLLs:
 // they are providers that register themselves (Kernel32.c, LIBRARY_PROVIDER). Nor about debuggers and unwinders:
-// they are observers of loads and unloads (SymbolBridge.c, LIBRARY_OBSERVER).
+// they are observers of loads and unloads (FrameBridge.c, SymbolBridge.c, LIBRARY_OBSERVER).
 //
 // An import MODULE!FUNCTION (by name or by ordinal) is resolved in this order:
 //   1. providers given to LoadLibrary() by the caller (inherited by dependencies)
@@ -105,23 +105,39 @@ struct Module
   uint64_t* callbacks;                      // TLS callbacks, NULL terminated, NULL when none
   size_t unresolved;                        // Imports bound to thunks (step 4)
   int published;                            // Observers got LIBRARY_EVENT_LOADED
+  struct
+  {
+    const uint8_t* data;                    // The PE file as read, during LIBRARY_EVENT_MAPPING only
+    size_t length;                          //
+  } file;
+  struct LibraryObserver* mapper;           // Observer that provided the memory of the image, NULL for mmap()
 };
 
-// Observers of modules, as la_objopen()/la_objclose() of rtld-audit: LIBRARY_EVENT_LOADED when a module is ready
-// (relocated, bound, protected, before LoadLibrary() returns it, for every dependency too), LIBRARY_EVENT_UNLOADING
-// before it is unmapped (FreeLibrary() and the collector, cycles included). A failed load is not published.
-// Observers are called with the lock of the loader held and must not call LoadLibrary() or FreeLibrary().
-// Registration replays LIBRARY_EVENT_LOADED for modules already loaded, unregistration LIBRARY_EVENT_UNLOADING
+// Observers of modules, a chain in the order of registration, as la_objopen()/la_objclose() of rtld-audit:
+//   LIBRARY_EVENT_MAPPING    before the image is mapped (not for images with stripped relocations, they need their
+//                            ImageBase): image->file and image->size are known, an observer may provide zeroed memory
+//                            of image->size bytes, page aligned and writable, in image->base; the first one does, the
+//                            rest see image->base set; otherwise the loader maps it
+//   LIBRARY_EVENT_LOADED     the module is ready (relocated, bound, protected, before LoadLibrary() returns it, for
+//                            every dependency too)
+//   LIBRARY_EVENT_UNLOADING  before the module goes away (FreeLibrary() and the collector, cycles included)
+//   LIBRARY_EVENT_UNMAPPING  to the observer that provided the memory only, when it is to be released (after
+//                            LIBRARY_EVENT_UNLOADING, or after a failed load)
+// A failed load is not published (no LOADED and UNLOADING). Observers are called with the lock of the loader held and
+// must not call LoadLibrary() or FreeLibrary(). Registration replays LIBRARY_EVENT_LOADED for modules already loaded,
+// unregistration LIBRARY_EVENT_UNLOADING; an observer that provided memory is unregistered after its images are freed
 
+#define LIBRARY_EVENT_MAPPING    0
 #define LIBRARY_EVENT_LOADED     1
 #define LIBRARY_EVENT_UNLOADING  2
+#define LIBRARY_EVENT_UNMAPPING  3
 
-typedef void (*LibraryObserverFunction)(struct Module* image, int event);
+typedef void (*LibraryObserverFunction)(int event, struct Module* image);
 
 struct LibraryObserver
 {
+  struct LibraryObserver* next;         // Next in the chain
   LibraryObserverFunction function;
-  struct LibraryObserver* next;         // Used by the registry
 };
 
 void RegisterLibraryObserver(struct LibraryObserver* observer);
@@ -130,7 +146,7 @@ void UnregisterLibraryObserver(struct LibraryObserver* observer);
 // Declares an observer that registers itself when the object is loaded and unregisters when it is unloaded
 
 #define LIBRARY_OBSERVER(identifier, function)                                                                     \
-  static struct LibraryObserver identifier = { function, NULL };                                                   \
+  static struct LibraryObserver identifier = { NULL, function };                                                   \
   static void __attribute__((constructor)) Register##identifier(void) { RegisterLibraryObserver(&identifier); }    \
   static void __attribute__((destructor)) Unregister##identifier(void) { UnregisterLibraryObserver(&identifier); }
 

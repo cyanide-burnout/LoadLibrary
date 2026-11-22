@@ -6,6 +6,7 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
+#include <sys/mman.h>
 #include <sys/syscall.h>
 #include <pthread.h>
 #include <semaphore.h>
@@ -55,9 +56,12 @@ static int Published = 0;
 static int Withdrawn = 0;
 static char Events[256];
 
-static void Observe(struct Module* image, int event)
+static void Observe(int event, struct Module* image)
 {
   size_t length = strlen(Events);
+
+  if ((event == LIBRARY_EVENT_MAPPING) || (event == LIBRARY_EVENT_UNMAPPING))
+    return;
 
   if (event == LIBRARY_EVENT_LOADED)
     Published ++;
@@ -67,7 +71,33 @@ static void Observe(struct Module* image, int event)
   snprintf(Events + length, sizeof(Events) - length, "%c%s ", (event == LIBRARY_EVENT_LOADED) ? '+' : '-', image->name);
 }
 
-static struct LibraryObserver Observer = { Observe, NULL };
+static struct LibraryObserver Observer = { NULL, Observe };
+
+// An observer that provides the memory of images, as SymbolBridge.c does
+
+static int Mapped = 0;
+static int Unmapped = 0;
+
+static struct LibraryObserver Mapper;
+
+static void Map(int event, struct Module* image)
+{
+  if (event == LIBRARY_EVENT_MAPPING)
+  {
+    CHECK((image->base == NULL) && (image->file.data != NULL) && (image->file.length > 0) && (memcmp(image->file.data, "MZ", 2) == 0));
+    image->base = (uint8_t*)mmap(NULL, image->size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    Mapped ++;
+  }
+
+  if (event == LIBRARY_EVENT_UNMAPPING)
+  {
+    CHECK(image->mapper == &Mapper);
+    munmap(image->base, image->size);
+    Unmapped ++;
+  }
+}
+
+static struct LibraryObserver Mapper = { NULL, Map };
 
 // Runs function in a child, returns the signal that terminated it (0 when it returned)
 
@@ -699,7 +729,7 @@ int main(int argc, char** argv)
   // 20. Observers: every module is published once when ready and before it is unmapped, failed loads are not,
   //     registration replays what is loaded already
 
-  fprintf(stderr, "20. Observers (expect one error below)\n");
+  fprintf(stderr, "20. Observers (expect two errors below)\n");
   {
     char fixed[4096], second[4096];
     snprintf(path, sizeof(path), "%s/A.dll", argv[1]);
@@ -727,6 +757,35 @@ int main(int argc, char** argv)
     CHECK(Withdrawn == 7);
     UnregisterLibraryObserver(&Observer);
     CHECK((Published == 7) && (Withdrawn == 7));
+
+    // Memory from an observer: given back when the module goes away and when a load fails after mapping, never for
+    // images with stripped relocations
+    RegisterLibraryObserver(&Mapper);
+    module = LoadLibrary(path, NULL, Report);
+    CHECK((module != NULL) && (Mapped == 3) && (module->mapper == &Mapper) && (((UnaryFunction)GetProcAddress(module, "Twice"))(21) == 42));
+    FreeLibrary(module);
+    CHECK(Unmapped == 3);
+
+    char broken[4096];
+    FILE* file;
+    snprintf(broken, sizeof(broken), "%s/Broken.dll", argv[1]);
+    snprintf(second, sizeof(second), "%s/A.dll", argv[1]);
+    if ((file = fopen(second, "rb")) != NULL)
+    {
+      uint8_t data[0x500];
+      size_t length = fread(data, 1, sizeof(data), file);
+      fclose(file);
+      file = fopen(broken, "wb");
+      fwrite(data, 1, length, file);
+      fclose(file);
+    }
+    CHECK((LoadLibrary(broken, NULL, Report) == NULL) && (Mapped == 4) && (Unmapped == 4));    // sections out of the file
+    unlink(broken);
+
+    first = LoadLibrary(fixed, NULL, Report);
+    CHECK((first != NULL) && (first->mapper == NULL) && (Mapped == 4));
+    FreeLibrary(first);
+    UnregisterLibraryObserver(&Mapper);
   }
 
   // 7. Not a PE file
