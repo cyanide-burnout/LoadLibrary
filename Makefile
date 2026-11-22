@@ -37,6 +37,7 @@ check: all $(TESTS)
 	Tests/loadlibrary-test $(DLLS)
 	test "$$(Examples/call $(DLLS)/B.dll Add 2 3)" = 5
 	Tools/loadlibrary-check $(DLLS)/A.dll
+	! Tools/loadlibrary-check --attach $(DLLS)/V.dll
 	python3 Tools/LibraryCheck.py $(DLLS)/A.dll Twice Missing
 
 clean:

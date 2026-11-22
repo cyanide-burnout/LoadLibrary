@@ -4,7 +4,8 @@
 //
 // The DLL is loaded by the real loader with the registered providers (Kernel32.c), so the verdict about loading is
 // what a module would get. Unresolved imports are grouped: beyond the line (Wine) or candidates for a provider.
-// --attach also runs DllMain (AttachLibrary) in a child process and tells how it ended.
+// --attach also runs DllMain (AttachLibrary) in a child process and tells how it ended; the exit status is 1 when
+// the DLL does not load or DllMain does not pass, 2 on wrong arguments, 0 otherwise.
 // Which unresolved imports the needed exports can actually reach is told by LibraryCheck.py
 
 #include <stdio.h>
@@ -12,6 +13,7 @@
 #include <string.h>
 #include <strings.h>
 #include <stdarg.h>
+#include <errno.h>
 #include <unistd.h>
 #include <signal.h>
 #include <sys/wait.h>
@@ -112,36 +114,51 @@ static void CollectImport(const char* module, const char* name, void* context)
     entry->category = CATEGORY_PROVIDER;
 }
 
-static void CollectModule(struct Module* image, struct Module** visited, int* count)
+#define MODULE_COUNT  256
+
+static void CollectModule(struct Module* image, struct Module** visited, int* count, int* skipped)
 {
   for (int index = 0; index < *count; index ++)
     if (visited[index] == image)
       return;
 
+  if (*count >= MODULE_COUNT)
+  {
+    (*skipped) ++;
+    return;
+  }
+
   visited[(*count) ++] = image;
   GetLibraryUnresolvedImports(image, CollectImport, NULL);
 
   for (size_t index = 0; index < image->number; index ++)
-    CollectModule(image->dependencies[index], visited, count);
+    CollectModule(image->dependencies[index], visited, count, skipped);
 }
 
-// DllMain in a child: the exit code tells the result, aborts of thunks come through stderr
+// DllMain in a child: the exit code tells the result, aborts of thunks come through stderr.
+// The pipe is read to the end, so a child that writes more than the buffer does not block; the rest is dropped
 
-static void Attach(struct Module* image)
+static int Attach(struct Module* image)
 {
   char output[8192];
+  char rest[4096];
   int pipes[2];
   pid_t process;
   ssize_t length;
+  size_t dropped;
   size_t total;
   int status;
 
   fflush(stdout);
 
-  if (pipe(pipes) < 0)
-    return;
+  if ((pipe(pipes) < 0) ||
+      ((process = fork()) < 0))
+  {
+    printf("DllMain:      not checked, %s\n", strerror(errno));
+    return -1;
+  }
 
-  if ((process = fork()) == 0)
+  if (process == 0)
   {
     dup2(pipes[1], STDERR_FILENO);
     Direct = 1;
@@ -149,12 +166,20 @@ static void Attach(struct Module* image)
   }
 
   close(pipes[1]);
-  total = 0;
+  total   = 0;
+  dropped = 0;
   while ((total + 1 < sizeof(output)) && ((length = read(pipes[0], output + total, sizeof(output) - total - 1)) > 0))
     total += length;
+  while ((length = read(pipes[0], rest, sizeof(rest))) > 0)
+    dropped += length;
   output[total] = '\0';
   close(pipes[0]);
-  waitpid(process, &status, 0);
+
+  if (waitpid(process, &status, 0) < 0)
+  {
+    printf("DllMain:      not checked, %s\n", strerror(errno));
+    return -1;
+  }
 
   if (WIFEXITED(status) && (WEXITSTATUS(status) == 0))
     printf("DllMain:      OK (TLS callbacks and DllMain with DLL_PROCESS_ATTACH passed)\n");
@@ -165,6 +190,10 @@ static void Attach(struct Module* image)
 
   if (total > 0)
     printf("%s", output);
+  if (dropped > 0)
+    printf("              (%zu more bytes of output dropped)\n", dropped);
+
+  return (WIFEXITED(status) && (WEXITSTATUS(status) == 0)) ? 0 : -1;
 }
 
 int main(int argc, char** argv)
@@ -173,7 +202,9 @@ int main(int argc, char** argv)
   struct Module* visited[256];
   const char* path;
   int attach;
+  int result;
   int count;
+  int skipped;
   int totals[CATEGORY_COUNT] = { 0 };
 
   attach = (argc > 2) && (strcmp(argv[1], "--attach") == 0);
@@ -206,14 +237,17 @@ int main(int argc, char** argv)
   if (MessageLength > 0)
     printf("%s", Messages);
 
-  count = 0;
-  CollectModule(image, visited, &count);
+  count   = 0;
+  skipped = 0;
+  CollectModule(image, visited, &count, &skipped);
 
   if (count > 1)
   {
     printf("Dependencies:");
     for (int index = 1; index < count; index ++)
       printf(" %s", visited[index]->name);
+    if (skipped > 0)
+      printf(" and %d more, not checked", skipped);
     printf("\n");
   }
 
@@ -233,10 +267,14 @@ int main(int argc, char** argv)
     }
   }
 
-  if (attach)
-    Attach(image);
+  result = 0;
+  if (attach &&
+      (Attach(image) < 0))
+    result = 1;
 
-  if (totals[CATEGORY_DYNAMIC_CRT] + totals[CATEGORY_SUBSYSTEM] > 0)
+  if (result != 0)
+    printf("Verdict:      loads, but DllMain does not pass (see above)\n");
+  else if (totals[CATEGORY_DYNAMIC_CRT] + totals[CATEGORY_SUBSYSTEM] > 0)
     printf("Verdict:      beyond the line, use Wine (imports of the dynamic CRT or of Windows subsystems)\n");
   else if (EntryCount > 0)
     printf("Verdict:      loads; unresolved imports abort only when called. Check which ones the exports you need reach:\n"
@@ -245,5 +283,5 @@ int main(int argc, char** argv)
     printf("Verdict:      fits, every import is resolved\n");
 
   FreeLibrary(image);
-  return 0;
+  return result;
 }
