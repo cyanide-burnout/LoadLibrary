@@ -7,7 +7,11 @@ separate process, no IPC. It is meant for computational DLLs with a statically
 linked CRT (codecs, signal processing, crypto cores) that have to be called
 from a Linux program at full speed.
 
-Two C files and a header, no dependencies beyond glibc.
+The loader is two C files and a header (`LoadLibrary.c` and `Kernel32.c`),
+with no dependencies beyond glibc. Two optional files on top of it,
+`FrameBridge.c` and `SymbolBridge.c`, make DLL frames visible to backtraces,
+`dladdr` and gdb; they need nothing more (libgcc and libunwind are used when
+the process has them).
 
 ## Why
 
