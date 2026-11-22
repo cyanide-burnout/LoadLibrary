@@ -177,6 +177,7 @@ const char* GetLibraryErrorText(int error)
 
 static pthread_mutex_t LibraryLock = PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
 static struct LibraryProvider* Providers = NULL;
+static struct LibraryObserver* Observers = NULL;
 static struct Module* Modules = NULL;
 
 // Environment of Windows code: TEB per thread, one PEB, static TLS of modules, notifications of DllMain
@@ -506,6 +507,61 @@ void UnregisterLibraryProvider(struct LibraryProvider* provider)
     if (*pointer == provider)
     {
       *pointer = provider->next;
+      break;
+    }
+  }
+
+  pthread_mutex_unlock(&LibraryLock);
+}
+
+// Called with LibraryLock
+
+static void PublishModule(struct Module* image, int event)
+{
+  struct LibraryObserver* observer;
+
+  if (image->published != (event == LIBRARY_EVENT_UNLOADING))
+    return;
+
+  for (observer = Observers; observer != NULL; observer = observer->next)
+    observer->function(image, event);
+
+  image->published = (event == LIBRARY_EVENT_LOADED);
+}
+
+void RegisterLibraryObserver(struct LibraryObserver* observer)
+{
+  struct Module* image;
+
+  pthread_mutex_lock(&LibraryLock);
+
+  observer->next = Observers;
+  Observers      = observer;
+
+  for (image = Modules; image != NULL; image = image->next)
+    if (image->published != 0)
+      observer->function(image, LIBRARY_EVENT_LOADED);
+
+  pthread_mutex_unlock(&LibraryLock);
+}
+
+void UnregisterLibraryObserver(struct LibraryObserver* observer)
+{
+  struct LibraryObserver** pointer;
+  struct Module* image;
+
+  pthread_mutex_lock(&LibraryLock);
+
+  for (pointer = &Observers; *pointer != NULL; pointer = &(*pointer)->next)
+  {
+    if (*pointer == observer)
+    {
+      *pointer = observer->next;
+
+      for (image = Modules; image != NULL; image = image->next)
+        if (image->published != 0)
+          observer->function(image, LIBRARY_EVENT_UNLOADING);
+
       break;
     }
   }
@@ -1560,6 +1616,7 @@ struct Module* LoadLibrary(const char* path, const struct LibraryProvider* provi
 
   munmap(data, status.st_size);
   close(handle);
+  PublishModule(image, LIBRARY_EVENT_LOADED);
   pthread_mutex_unlock(&LibraryLock);
   return image;
 
@@ -1667,6 +1724,9 @@ static void CollectModules(void)
 
     last->attached = 0;
   }
+
+  for (image = garbage; image != NULL; image = image->next)
+    PublishModule(image, LIBRARY_EVENT_UNLOADING);
 
   for (image = garbage; image != NULL; image = image->next)
   {

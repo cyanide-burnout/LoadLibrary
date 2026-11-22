@@ -20,6 +20,9 @@
 #          a TLS callback and DllMain, both report to TEST.dll!Note(who, reason): callback 1, DllMain 2
 #   W.dll  imports U!GetTls, DllMain reports as 3
 #   V.dll  DllMain reports as 4 and returns FALSE
+#   X.dll  unwind information (.pdata/.xdata) for SymbolBridgeTest.c: Outer(callback, value) has a frame pointer,
+#          pushes, a save by MOV and a dynamic allocation only the frame pointer describes, and calls Middle(),
+#          whose body is a chained fragment calling callback(value); Trap() is a leaf without .pdata (ud2)
 #
 # usage: LoadLibraryTest.py <output directory>
 
@@ -59,12 +62,14 @@ class Code:
         self.emit(suffix)
 
 
-def build(name, base, code, imports, exports, data_items, delayed=None, fixed=False, section_alignment=SECTION_ALIGNMENT, tls=None, entry_point=None):
+def build(name, base, code, imports, exports, data_items, delayed=None, fixed=False, section_alignment=SECTION_ALIGNMENT, tls=None, entry_point=None, pdata=None):
     # imports:    {dll: [function or ordinal, ...]}, IAT entries are symbols "iat:dll!function" ("iat:dll!#n")
     # delayed:    {dll: [function, ...]}, IAT entries "diat:dll!function", the module handle "dhandle:dll"
     # fixed:      stripped relocations, the image works at its ImageBase only
     # tls:        {'template': bytes, 'zero': n, 'callback': label or None}, the index is the symbol "tls:index"
     # entry_point: label of DllMain
+    # pdata:      [{'begin', 'end', 'prolog', 'frame': (register, offset / 16), 'codes': [(offset, op, info, [slots])], 'chain': index}]
+    #             codes in the order of the prolog, a chained entry refers to an earlier one
     # exports:    [(name, ("code", label) | ("forward", "C.Mul") | ("data", item))]
     # data_items: {item: ("pointer", label)}, 8 bytes with DIR64 relocation
 
@@ -125,6 +130,29 @@ def build(name, base, code, imports, exports, data_items, delayed=None, fixed=Fa
 
     for item, (kind, label) in data_items.items():
         symbols['data:' + item] = put(b'\0' * (label if kind == 'zero' else 8))
+
+    # Unwind information and the exception directory
+
+    pdata = pdata or []
+    unwind = []
+    for entry in pdata:
+        codes = []
+        for offset, op, info, slots in reversed(entry['codes']):
+            codes.append(struct.pack('<BB', offset, op | (info << 4)))
+            codes += [struct.pack('<H', slot) for slot in slots]
+        count = len(codes)
+        if count % 2:
+            codes.append(b'\0\0')
+        register, scaled = entry.get('frame') or (0, 0)
+        chained = entry.get('chain') is not None
+        blob = struct.pack('<BBBB', 1 | ((4 if chained else 0) << 3), entry['prolog'], count, register | (scaled << 4)) + b''.join(codes)
+        if chained:
+            parent = pdata[entry['chain']]
+            blob += struct.pack('<III', TEXT_RVA + code.labels[parent['begin']], TEXT_RVA + code.labels[parent['end']], unwind[entry['chain']])
+        unwind.append(put(blob, 4))
+    exception = put(b''.join(struct.pack('<III', TEXT_RVA + code.labels[entry['begin']], TEXT_RVA + code.labels[entry['end']], rva)
+                             for entry, rva in zip(pdata, unwind)), 4) if pdata else 0
+    exception_size = 12 * len(pdata)
 
     # TLS: template, index, callbacks, directory (VAs are filled when code is placed)
 
@@ -229,6 +257,7 @@ def build(name, base, code, imports, exports, data_items, delayed=None, fixed=Fa
     directories = [(0, 0)] * 16
     directories[0] = (directory, export_size)
     directories[1] = (descriptors, import_size)
+    directories[3] = (exception, exception_size)
     directories[5] = (reloc, reloc_size)
     directories[13] = (delay_descriptors, delay_size)
     if tls:
@@ -408,6 +437,45 @@ def main():
     code.label('DllMain')
     note(code, 4, 0)
     images['V.dll'] = build('V.dll', 0x10000000, code, {'TEST.dll': ['Note']}, [('DllMain', ('code', 'DllMain'))], {}, entry_point='DllMain')
+
+    # X.dll: unwind information for SymbolBridgeTest.c
+
+    code = Code()
+    code.label('Outer')
+    code.emit(b'\x55')                                   # push rbp                   1
+    code.emit(b'\x53')                                   # push rbx                   2
+    code.emit(b'\x48\x83\xec\x48')                       # sub rsp, 0x48              6
+    code.emit(b'\x48\x8d\x6c\x24\x20')                   # lea rbp, [rsp + 0x20]      11
+    code.emit(b'\x48\x89\x74\x24\x40')                   # mov [rsp + 0x40], rsi      16
+    code.emit(b'\x48\x83\xec\x30')                       # sub rsp, 0x30: dynamic, only rbp describes the frame now
+    code.rip(b'\xe8', 'code:Middle')                     # call Middle (rcx, rdx pass through)
+    code.emit(b'\x48\x83\xc4\x30')                       # add rsp, 0x30
+    code.emit(b'\x48\x8b\x74\x24\x40')                   # mov rsi, [rsp + 0x40]
+    code.emit(b'\x48\x83\xc4\x48')                       # add rsp, 0x48
+    code.emit(b'\x5b\x5d\xc3')                           # pop rbx; pop rbp; ret
+    code.label('OuterEnd')
+    code.emit(b'\xcc' * 3)
+    code.label('Middle')
+    code.emit(b'\x48\x81\xec\x88\x00\x00\x00')           # sub rsp, 0x88              7
+    code.label('MiddleBody')
+    code.emit(b'\x48\x89\xc8')                           # mov rax, rcx
+    code.emit(b'\x48\x89\xd1')                           # mov rcx, rdx
+    code.emit(b'\xff\xd0')                               # call rax
+    code.emit(b'\x48\x81\xc4\x88\x00\x00\x00')           # add rsp, 0x88
+    code.emit(b'\xc3')
+    code.label('MiddleEnd')
+    code.emit(b'\xcc' * 5)                               # a gap: covered as a leaf
+    code.label('Trap')
+    code.emit(b'\x0f\x0b\xc3')                           # ud2; ret
+    code.label('TrapEnd')
+    unwind_info = [
+        {'begin': 'Outer', 'end': 'OuterEnd', 'prolog': 16, 'frame': (5, 2),
+         'codes': [(1, 0, 5, []), (2, 0, 3, []), (6, 2, (0x48 - 8) // 8, []), (11, 3, 0, []), (16, 4, 6, [0x40 // 8])]},
+        {'begin': 'Middle', 'end': 'MiddleBody', 'prolog': 7, 'codes': [(7, 1, 0, [0x88 // 8])]},
+        {'begin': 'MiddleBody', 'end': 'MiddleEnd', 'prolog': 0, 'codes': [], 'chain': 1}]
+    images['X.dll'] = build('X.dll', 0x10000000, code, {},
+                            [(label, ('code', label)) for label in ('Outer', 'OuterEnd', 'Middle', 'MiddleBody', 'MiddleEnd', 'Trap', 'TrapEnd')], {},
+                            pdata=unwind_info)
 
     for name, image in images.items():
         with open(os.path.join(output, name), 'wb') as file:

@@ -49,6 +49,26 @@ static int LIBRARY_ABI FakeAdd(int value1, int value2)
   return value1 * 100 + value2;
 }
 
+// Observer: counts events and checks that a published module is ready (protected, entry known)
+
+static int Published = 0;
+static int Withdrawn = 0;
+static char Events[256];
+
+static void Observe(struct Module* image, int event)
+{
+  size_t length = strlen(Events);
+
+  if (event == LIBRARY_EVENT_LOADED)
+    Published ++;
+  if (event == LIBRARY_EVENT_UNLOADING)
+    Withdrawn ++;
+
+  snprintf(Events + length, sizeof(Events) - length, "%c%s ", (event == LIBRARY_EVENT_LOADED) ? '+' : '-', image->name);
+}
+
+static struct LibraryObserver Observer = { Observe, NULL };
+
 // Runs function in a child, returns the signal that terminated it (0 when it returned)
 
 static int RunChild(void* function)
@@ -674,6 +694,39 @@ int main(int argc, char** argv)
     GetLibraryUnresolvedImports(module, CollectUnresolved, &found);
     CHECK((total == 2) && (found.count == 2) && (strcmp(found.names[0], "B.dll!Nope") == 0) && (strcmp(found.names[1], "B.dll!#") == 0));
     FreeLibrary(module);
+  }
+
+  // 20. Observers: every module is published once when ready and before it is unmapped, failed loads are not,
+  //     registration replays what is loaded already
+
+  fprintf(stderr, "20. Observers (expect one error below)\n");
+  {
+    char fixed[4096], second[4096];
+    snprintf(path, sizeof(path), "%s/A.dll", argv[1]);
+    RegisterLibraryObserver(&Observer);
+    module = LoadLibrary(path, NULL, Report);
+    CHECK((module != NULL) && (Published == 3) && (Withdrawn == 0) && (module->published == 1));
+    CHECK((strstr(Events, "+B.dll ") != NULL) && (strstr(Events, "+C.dll ") != NULL) && (strstr(Events, "+A.dll ") == Events + 14));
+    CHECK(LoadLibrary(path, NULL, Report) == module);                                     // shared: no new event
+    CHECK(Published == 3);
+    FreeLibrary(module);
+    CHECK(Withdrawn == 0);
+    UnregisterLibraryObserver(&Observer);                                                 // replays unloading
+    CHECK(Withdrawn == 3);
+    RegisterLibraryObserver(&Observer);                                                   // replays loaded
+    CHECK(Published == 6);
+    Events[0] = '\0';
+    FreeLibrary(module);
+    CHECK((Withdrawn == 6) && (strstr(Events, "-A.dll") != NULL) && (strstr(Events, "-B.dll") != NULL) && (strstr(Events, "-C.dll") != NULL));
+
+    snprintf(fixed, sizeof(fixed), "%s/G.dll", argv[1]);
+    snprintf(second, sizeof(second), "%s/H.dll", argv[1]);
+    struct Module* first = LoadLibrary(fixed, NULL, Report);
+    CHECK((LoadLibrary(second, NULL, Report) == NULL) && (Published == 7));                  // H.dll failed: not published
+    FreeLibrary(first);
+    CHECK(Withdrawn == 7);
+    UnregisterLibraryObserver(&Observer);
+    CHECK((Published == 7) && (Withdrawn == 7));
   }
 
   // 7. Not a PE file

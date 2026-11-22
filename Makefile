@@ -8,11 +8,19 @@ CFLAGS ?= -O2 -g
 override CFLAGS += -std=gnu99 -Wall -fPIC -ILoader
 
 OBJECTS = Loader/LoadLibrary.o Loader/Kernel32.o
+BRIDGE  = Loader/SymbolBridge.o
 TOOLS   = Tools/loadlibrary-check Examples/call
-TESTS   = Tests/loadlibrary-test Tests/kernel32-test
+TESTS   = Tests/loadlibrary-test Tests/kernel32-test Tests/symbolbridge-test Tests/symbolbridge-baseline
 DLLS    = Tests/DLL
 
-all: $(OBJECTS) $(TOOLS)
+# SymbolBridge.o is optional, linked like Kernel32.o. It feeds libunwind too when the system has its headers;
+# then the test is also built against libunwind
+
+HASH      := \#
+LIBUNWIND := $(shell printf '$(HASH)include <libunwind-dynamic.h>\n' | $(CC) -E -x c - >/dev/null 2>&1 && echo yes)
+TESTS     += $(if $(LIBUNWIND),Tests/symbolbridge-libunwind)
+
+all: $(OBJECTS) $(BRIDGE) $(TOOLS)
 
 Loader/%.o: Loader/%.c Loader/LoadLibrary.h
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -29,6 +37,15 @@ Tests/loadlibrary-test: Tests/LoadLibraryTest.c $(OBJECTS)
 Tests/kernel32-test: Tests/Kernel32Test.c $(OBJECTS)
 	$(CC) $(CFLAGS) $^ -lpthread -o $@
 
+Tests/symbolbridge-test: Tests/SymbolBridgeTest.c $(OBJECTS) $(BRIDGE)
+	$(CC) $(CFLAGS) -rdynamic $^ -ldl -lpthread -o $@
+
+Tests/symbolbridge-baseline: Tests/SymbolBridgeTest.c $(OBJECTS)
+	$(CC) $(CFLAGS) -rdynamic -DBASELINE $^ -ldl -lpthread -o $@
+
+Tests/symbolbridge-libunwind: Tests/SymbolBridgeTest.c $(OBJECTS) $(BRIDGE)
+	$(CC) $(CFLAGS) -rdynamic -DWITH_LIBUNWIND $^ -lunwind -ldl -lpthread -o $@
+
 # Test DLLs are generated, no Windows toolchain is needed
 
 check: all $(TESTS)
@@ -39,9 +56,12 @@ check: all $(TESTS)
 	Tools/loadlibrary-check $(DLLS)/A.dll
 	! Tools/loadlibrary-check --attach $(DLLS)/V.dll
 	python3 Tools/LibraryCheck.py $(DLLS)/A.dll Twice Missing
+	Tests/symbolbridge-baseline $(DLLS)
+	Tests/symbolbridge-test $(DLLS)
+	$(if $(LIBUNWIND),Tests/symbolbridge-libunwind $(DLLS))
 
 clean:
-	rm -f $(OBJECTS) $(TOOLS) $(TESTS)
+	rm -f $(OBJECTS) $(BRIDGE) $(TOOLS) $(TESTS) Tests/symbolbridge-libunwind
 	rm -f $(DLLS)/*.dll
 	-rmdir $(DLLS)
 

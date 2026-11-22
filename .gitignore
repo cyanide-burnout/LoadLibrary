@@ -4,3 +4,6 @@ Examples/call
 Tests/loadlibrary-test
 Tests/kernel32-test
 Tests/DLL/
+Tests/symbolbridge-test
+Tests/symbolbridge-baseline
+Tests/symbolbridge-libunwind

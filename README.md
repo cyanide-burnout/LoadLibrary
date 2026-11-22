@@ -42,7 +42,10 @@ unexpected call is never silent.
   code pages, a few stubs);
 - error codes for failures, a list of unresolved imports, names for addresses
   inside DLLs (`A.dll+0x1003 (Twice+0x3)`) that are safe in a fault handler;
-- messages through a function with the signature of `syslog(3)`.
+- messages through a function with the signature of `syslog(3)`;
+- observers of loads and unloads, and `SymbolBridge.c` on top of them: the
+  `.pdata` of DLLs translated into DWARF CFI for libgcc and libunwind, so
+  backtraces of fault handlers pass through DLL frames, epilogues included.
 
 ## Where the line is
 
@@ -93,6 +96,9 @@ The full example is `Examples/Call.c`.
 - `Tools/loadlibrary-check [--attach] library.dll` loads the DLL with the real
   loader and tells why it fails, what stays unresolved (grouped by the side of
   the line), and with `--attach` whether `DllMain` passes.
+- `Loader/SymbolBridge.c` is optional: link its object like `Kernel32.o` and
+  traces of `backtrace()`, `_Unwind_Backtrace` and libunwind go through DLL
+  frames.
 - `Tools/LibraryCheck.py library.dll [export ...]` walks the call graph from
   the exports you need (with `objdump`) and lists the imports and TEB fields
   they reach, so error paths can be told from normal work.

@@ -39,8 +39,12 @@ of what a DLL may need and what it would take, not as work to do.
 
 ### Diagnostics
 
-- **Crash stacks stop at DLL frames.** The DLL has `.pdata` but no DWARF.
-  `GetLibraryAddressName` already names an address as `module+offset` with
-  the nearest export, and is safe in a fault handler. What is left is to call
-  it from the fault handler of the host process: the loader cannot install one
-  itself without taking over the signals of its host.
+- **Names of DLL frames for `dladdr`.** SymbolBridge makes traces pass through
+  DLL frames, names come from `GetLibraryAddressName`, which a fault handler of
+  the host calls. `dladdr` and `dl_iterate_phdr` do not see the images. Fix: an
+  ELF wrapper in a memfd opened by `dlopen` (one `PT_LOAD` of `SizeOfImage`,
+  `.dynsym` from the exports, the same `.eh_frame`), with the image mapped
+  inside it; it needs a hook of the loader for the memory of an image.
+- **Debuggers and profilers.** gdb and perf do not know the images. Fix: the
+  GDB JIT interface (`__jit_debug_register_code`) with an ELF in memory
+  (symbols of the exports and the same CFI), and `/tmp/perf-PID.map` lines.
