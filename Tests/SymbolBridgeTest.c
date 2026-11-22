@@ -130,6 +130,11 @@ int main(int argc, char** argv)
         ((strcmp(information.dli_sname, "MiddleBody") == 0) || (strcmp(information.dli_sname, "Middle") == 0)));
   CHECK(strcmp(GetName(trap + 1), "Trap") == 0);
 
+  // A function split as MSVC does (a second entry of .pdata, not chained): one symbol over both parts
+  uint8_t* split = (uint8_t*)GetProcAddress(image, "Split");
+  CHECK((dladdr(split + 8, &information) != 0) && (information.dli_sname != NULL) && (strcmp(information.dli_sname, "Split") == 0) &&
+        (information.dli_saddr == split));
+
   // dlsym() through the handle of the object (the link_map in glibc), dl_iterate_phdr()
 
   CHECK((dladdr1(outer, &information, (void**)&map, RTLD_DL_LINKMAP) != 0) && (dlsym((void*)map, "Outer") == outer));
@@ -157,6 +162,16 @@ int main(int argc, char** argv)
   void* bases[3];
   const void* entry = (find != NULL) ? find(outer + 1, bases) : NULL;
   CHECK((entry != NULL) && (dladdr(entry, &information) != 0) && (information.dli_fbase == image->base));
+#endif
+
+#ifndef NAMES_ONLY
+  // Unwinding through the second part of the split function
+  CHECK(RunOuter((OuterFunction)split) == 6);
+  trace[0] = '\0';
+  for (int index = 0; index < Count; index ++)
+    snprintf(trace + strlen(trace), sizeof(trace) - strlen(trace), "%s ", GetName(Frames[index]));
+  fprintf(stderr, "  trace: %s\n", trace);
+  CHECK(strstr(trace, "Split RunOuter main") != NULL);
 #endif
 
   // Images inside the objects work: dependencies, a forward, SectionAlignment below the page size

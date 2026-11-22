@@ -61,6 +61,7 @@ struct Function
   uint32_t begin;
   uint32_t end;
   uint32_t root;     // Start of the function a chained fragment belongs to
+  int continued;     // A part of the function before it: chained, or its frame is built at its start
 };
 
 struct Export
@@ -209,7 +210,30 @@ static const struct Export* FindExport(const struct Export* exports, size_t coun
   return NULL;
 }
 
-// Functions of .pdata, a chained fragment knows the start of its function
+// The frame is built at the start of the range: an operation of the prolog at offset 0. A function begins with no
+// frame, and an offset in the prolog is the end of an instruction, at least 1. MSVC splits a function into several
+// entries of .pdata, not always chained: such a part repeats the operations of the prolog at offset 0
+
+static int IsContinued(const uint8_t* information)
+{
+  uint8_t code;
+  int size;
+
+  for (int index = 0; index < information[2]; index += size)
+  {
+    code = information[4 + 2 * index + 1] & 15;
+    size = 1 + (code == 1) * (1 + ((information[4 + 2 * index + 1] >> 4) != 0)) + ((code == 4) || (code == 6) || (code == 8)) + 2 * ((code == 5) || (code == 7) || (code == 9));
+
+    // Descriptions of epilogues (version 2) keep other values there
+    if ((code != 6) && (code != 7) && (information[4 + 2 * index] == 0))
+      return 1;
+  }
+
+  return 0;
+}
+
+// Functions of .pdata: a chained fragment knows the start of its function, parts that follow one another without a
+// gap are one function
 
 static struct Function* ReadFunctions(struct File* file, uint32_t address, uint32_t length, size_t* count)
 {
@@ -236,6 +260,10 @@ static struct Function* ReadFunctions(struct File* file, uint32_t address, uint3
     functions[number].root  = functions[number].begin;
     unwind                  = READ32(table + 12 * index + 8);
 
+    if ((information = GetFileAddress(file, unwind, 4)) != NULL)
+      functions[number].continued = ((information[0] >> 3) & UNW_FLAG_CHAININFO) ||
+                                    ((GetFileAddress(file, unwind, 4 + 2 * information[2]) != NULL) && IsContinued(information));
+
     for (depth = 0; depth < CHAIN_DEPTH; depth ++)
     {
       if (((information = GetFileAddress(file, unwind, 4)) == NULL) ||
@@ -251,7 +279,21 @@ static struct Function* ReadFunctions(struct File* file, uint32_t address, uint3
   }
 
   qsort(functions, number, sizeof(struct Function), CompareFunctions);
-  *count = number;
+
+  // A part right after the function it continues extends it
+  for (size_t index = 0, total = number; index < total; index ++)
+  {
+    if ((index > 0) &&
+        (functions[index].continued != 0) &&
+        (functions[index].begin == functions[*count - 1].end))
+    {
+      functions[*count - 1].end = functions[index].end;
+      continue;
+    }
+
+    functions[(*count) ++] = functions[index];
+  }
+
   return functions;
 }
 

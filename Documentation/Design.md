@@ -341,7 +341,11 @@ a small ELF object in a memfd and opens it with `dlopen`:
 - the second `PT_LOAD` holds `.dynamic`, `.hash`, `.dynsym` and `.dynstr`:
   the exports, and the functions of `.pdata` without a name as `dll+0x1040`,
   with their sizes (`dladdr` of glibc matches a symbol of size 0 at its exact
-  address only); a chained fragment carries the name of its function;
+  address only); a chained fragment carries the name of its function, and
+  parts of one function that follow one another (MSVC splits functions into
+  several entries of `.pdata`, not always chained: such a part repeats the
+  operations of the prolog at offset 0, while a function starts with no
+  frame) are one symbol;
 - with FrameBridge linked, the same part also has the `.eh_frame` of the
   image (translated from the file) and `.eh_frame_hdr` with
   `PT_GNU_EH_FRAME`: libgcc, libunwind and gdb find the CFI through ld.so, as

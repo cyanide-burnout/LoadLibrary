@@ -22,7 +22,9 @@
 #   V.dll  DllMain reports as 4 and returns FALSE
 #   X.dll  unwind information (.pdata/.xdata) for FrameBridgeTest.c: Outer(callback, value) has a frame pointer,
 #          pushes, a save by MOV and a dynamic allocation only the frame pointer describes, and calls Middle(),
-#          whose body is a chained fragment calling callback(value); Trap() is a leaf without .pdata (ud2)
+#          whose body is a chained fragment calling callback(value); Trap() is a leaf without .pdata (ud2);
+#          Split(callback, value) is split as MSVC does: its body is a second entry of .pdata, not chained, that
+#          repeats the operations of the prolog at offset 0
 #
 # usage: LoadLibraryTest.py <output directory>
 
@@ -468,13 +470,25 @@ def main():
     code.label('Trap')
     code.emit(b'\x0f\x0b\xc3')                           # ud2; ret
     code.label('TrapEnd')
+    code.label('Split')
+    code.emit(b'\x53')                                   # push rbx                   1
+    code.emit(b'\x48\x83\xec\x20')                       # sub rsp, 0x20              5
+    code.label('SplitTail')
+    code.emit(b'\x48\x89\xc8')                           # mov rax, rcx
+    code.emit(b'\x48\x89\xd1')                           # mov rcx, rdx
+    code.emit(b'\xff\xd0')                               # call rax
+    code.emit(b'\x48\x83\xc4\x20')                       # add rsp, 0x20
+    code.emit(b'\x5b\xc3')                               # pop rbx; ret
+    code.label('SplitEnd')
     unwind_info = [
         {'begin': 'Outer', 'end': 'OuterEnd', 'prolog': 16, 'frame': (5, 2),
          'codes': [(1, 0, 5, []), (2, 0, 3, []), (6, 2, (0x48 - 8) // 8, []), (11, 3, 0, []), (16, 4, 6, [0x40 // 8])]},
         {'begin': 'Middle', 'end': 'MiddleBody', 'prolog': 7, 'codes': [(7, 1, 0, [0x88 // 8])]},
-        {'begin': 'MiddleBody', 'end': 'MiddleEnd', 'prolog': 0, 'codes': [], 'chain': 1}]
+        {'begin': 'MiddleBody', 'end': 'MiddleEnd', 'prolog': 0, 'codes': [], 'chain': 1},
+        {'begin': 'Split', 'end': 'SplitTail', 'prolog': 5, 'codes': [(1, 0, 3, []), (5, 2, (0x20 - 8) // 8, [])]},
+        {'begin': 'SplitTail', 'end': 'SplitEnd', 'prolog': 0, 'codes': [(0, 0, 3, []), (0, 2, (0x20 - 8) // 8, [])]}]
     images['X.dll'] = build('X.dll', 0x10000000, code, {},
-                            [(label, ('code', label)) for label in ('Outer', 'OuterEnd', 'Middle', 'MiddleBody', 'MiddleEnd', 'Trap', 'TrapEnd')], {},
+                            [(label, ('code', label)) for label in ('Outer', 'OuterEnd', 'Middle', 'MiddleBody', 'MiddleEnd', 'Trap', 'TrapEnd', 'Split')], {},
                             pdata=unwind_info)
 
     for name, image in images.items():
