@@ -33,7 +33,7 @@ used inside a 64-bit process. It also takes the opposite approach: it
 threads, SEH, TLS, registry...) and a TEB on `%fs`, because it was made for
 mpengine.
 
-This loader takes the minimal approach. It proves that the exports we call do
+This loader takes the minimal approach. It proves that the exports a caller needs do
 not need an environment, and closes every remaining gap explicitly: a patch, a
 refusal, or a thunk that aborts with the name of the import. Environment is
 added only when a DLL actually needs it, one function at a time, through
@@ -56,7 +56,7 @@ which is what Wine exists for:
 Implementing that piece by piece would grow into a second Wine. So there are
 two steps: a DLL inside the line runs in the process through this loader; a
 DLL outside it runs in a separate process under Wine, behind a pipe or shared
-memory, as before.
+memory.
 
 To see on which side a DLL is, run the tools of Assessing a new DLL below:
 
