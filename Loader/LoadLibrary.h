@@ -150,6 +150,16 @@ void UnregisterLibraryObserver(struct LibraryObserver* observer);
   static void __attribute__((constructor)) Register##identifier(void) { RegisterLibraryObserver(&identifier); }    \
   static void __attribute__((destructor)) Unregister##identifier(void) { UnregisterLibraryObserver(&identifier); }
 
+// For observers: DWARF CFI (.eh_frame) of the unwind information of an image, the PE read through resolve() (an RVA
+// of the image to a pointer, NULL when it is out of the file or the image), pointers to code relative to themselves
+// for frames placed at the RVA origin (DW_EH_PE_pcrel | DW_EH_PE_sdata4). table gets pairs (RVA of a function,
+// offset of its FDE), sorted, count is their number. Returns malloc()ed frames of *length bytes, NULL on failure.
+// Implemented by FrameBridge.c: the reference is weak, NULL when it is not linked
+
+typedef const uint8_t* (*LibraryResolveFunction)(void* context, uint32_t address, uint32_t length);
+
+uint8_t* MakeLibraryFrames(struct Module* image, LibraryResolveFunction resolve, void* context, uint32_t origin, size_t* length, uint32_t** table, size_t* count) __attribute__((weak));
+
 // providers may be NULL, otherwise an array terminated by an entry with imports == NULL. It has to stay valid while
 // the module is loaded (forwards are resolved later). A file that is already loaded is shared: its counter is
 // increased, and providers of the call are not applied (reported when they differ)

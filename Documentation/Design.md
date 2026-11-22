@@ -309,6 +309,12 @@ see DLL frames.
    lookup so libgcc sorts it now and not in a fault handler that may have
    interrupted `malloc`) and in libunwind (`_U_dyn_register` with a search
    table next to the image), and removes both before the image is unmapped.
+   An image that ld.so already knows the CFI of (inside an object of
+   SymbolBridge with `PT_GNU_EH_FRAME`) is left to ld.so.
+
+The translation reads the PE through a function (an RVA to a pointer), so it
+works on a mapped image and on the file alike: `MakeLibraryFrames` gives it to
+SymbolBridge, with pointers relative to themselves.
 
 Both unwinders are weak references: what the process does not have is
 skipped, and libunwind support is compiled in when its headers are there.
@@ -336,14 +342,26 @@ a small ELF object in a memfd and opens it with `dlopen`:
   the exports, and the functions of `.pdata` without a name as `dll+0x1040`,
   with their sizes (`dladdr` of glibc matches a symbol of size 0 at its exact
   address only); a chained fragment carries the name of its function;
-- `PT_GNU_STACK` keeps the stacks of the process not executable.
+- with FrameBridge linked, the same part also has the `.eh_frame` of the
+  image (translated from the file) and `.eh_frame_hdr` with
+  `PT_GNU_EH_FRAME`: libgcc, libunwind and gdb find the CFI through ld.so, as
+  for any shared object, and FrameBridge has nothing to register;
+- `PT_GNU_STACK` keeps the stacks of the process not executable;
+- section headers at the end of the file, for gdb and other readers of the
+  file (ld.so needs none).
 
 ld.so runs nothing of it: no `DT_NEEDED`, no initializers. At
-`LIBRARY_EVENT_UNMAPPING` the object is closed. Its name for `dladdr`
-(`dli_fname`) is `/proc/self/fd/N` of the memfd, which stays open while the
-image lives, so a reader of that file finds a valid ELF there. The handle of
-`dlopen` is the `link_map` of the object in glibc, so
+`LIBRARY_EVENT_UNMAPPING` the object is closed. It is opened as
+`/proc/<pid>/fd/N` of its memfd, which stays open while the image lives: that
+is `dli_fname` of `dladdr` and `l_name` for gdb, which opens that path in its
+own process (so not `/proc/self`; images are not meant for forked children).
+The memfd is named after the DLL, so `readlink` of that path and
+`/proc/<pid>/maps` show `/memfd:name.dll (deleted)`, and `DT_SONAME` is the
+name too. The handle of `dlopen` is the `link_map` of the object in glibc, so
 `dladdr1(RTLD_DL_LINKMAP)` gives a handle for `dlsym`.
+
+gdb sees such an object as a shared library: `info sharedlibrary` lists it,
+`bt` names DLL frames and unwinds through them.
 
 Limits: leaf functions without `.pdata` have no name unless exported (the
 module and its base are still known); images with stripped relocations are
@@ -357,8 +375,9 @@ order.
 
 A profiling timer interrupts encoding and decoding, the handler unwinds and
 names frames by `dladdr` only. Without the bridges no sample inside the DLL
-unwinds to the host; with them all of about 5000 samples do, with libgcc and
-with libunwind, and 97 % of the DLL frames get a name (the rest are leaves).
+unwinds to the host; with them all samples do (thousands for each unwinder,
+FrameBridge alone or with the CFI inside the objects of SymbolBridge), and
+97 % of the DLL frames get a name (the rest are leaves).
 
 ## Assessing a new DLL
 
@@ -599,4 +618,5 @@ where the same traces must stop at the DLL. `SymbolBridgeTest.c` checks
 `dl_iterate_phdr`, DLLs with dependencies and small section alignment working
 inside the objects, an image with stripped relocations mapped by the loader,
 the object gone after `FreeLibrary`, and a trace of libgcc named by `dladdr`
-alone.
+alone; with both bridges libgcc finds the FDE inside the object, and built
+without FrameBridge the trace stops at the DLL with names still there.

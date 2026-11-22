@@ -10,7 +10,7 @@ override CFLAGS += -std=gnu99 -Wall -fPIC -ILoader
 OBJECTS = Loader/LoadLibrary.o Loader/Kernel32.o
 BRIDGES = Loader/FrameBridge.o Loader/SymbolBridge.o
 TOOLS   = Tools/loadlibrary-check Examples/call
-TESTS   = Tests/loadlibrary-test Tests/kernel32-test Tests/framebridge-test Tests/framebridge-baseline Tests/symbolbridge-test
+TESTS   = Tests/loadlibrary-test Tests/kernel32-test Tests/framebridge-test Tests/framebridge-baseline Tests/symbolbridge-test Tests/symbolbridge-names
 DLLS    = Tests/DLL
 
 # FrameBridge.o (unwinding) and SymbolBridge.o (names for dladdr) are optional, linked like Kernel32.o. FrameBridge
@@ -49,6 +49,9 @@ Tests/framebridge-libunwind: Tests/FrameBridgeTest.c $(OBJECTS) Loader/FrameBrid
 Tests/symbolbridge-test: Tests/SymbolBridgeTest.c $(OBJECTS) $(BRIDGES)
 	$(CC) $(CFLAGS) -rdynamic $^ -ldl -lpthread -o $@
 
+Tests/symbolbridge-names: Tests/SymbolBridgeTest.c $(OBJECTS) Loader/SymbolBridge.o
+	$(CC) $(CFLAGS) -rdynamic -DNAMES_ONLY $^ -ldl -lpthread -o $@
+
 # Test DLLs are generated, no Windows toolchain is needed
 
 check: all $(TESTS)
@@ -63,6 +66,7 @@ check: all $(TESTS)
 	Tests/framebridge-test $(DLLS)
 	$(if $(LIBUNWIND),Tests/framebridge-libunwind $(DLLS))
 	Tests/symbolbridge-test $(DLLS)
+	Tests/symbolbridge-names $(DLLS)
 
 clean:
 	rm -f $(OBJECTS) $(BRIDGES) $(TOOLS) $(TESTS) Tests/framebridge-libunwind

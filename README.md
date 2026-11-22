@@ -47,7 +47,8 @@ unexpected call is never silent.
   translates the `.pdata` of DLLs into DWARF CFI for libgcc and libunwind, so
   backtraces of fault handlers pass through DLL frames, epilogues included;
   `SymbolBridge.c` puts each image inside an ELF object of ld.so, so `dladdr`,
-  `dlsym` and `dl_iterate_phdr` name its functions.
+  `dlsym`, `dl_iterate_phdr` and gdb see its functions (with FrameBridge the
+  object carries the CFI too, and gdb unwinds through DLL frames).
 
 ## Where the line is
 

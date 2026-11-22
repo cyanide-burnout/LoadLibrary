@@ -8,3 +8,4 @@ Tests/framebridge-test
 Tests/framebridge-baseline
 Tests/framebridge-libunwind
 Tests/symbolbridge-test
+Tests/symbolbridge-names

@@ -39,13 +39,11 @@ of what a DLL may need and what it would take, not as work to do.
 
 ### Diagnostics
 
-- **gdb unwinding through DLL frames.** gdb sees the objects of SymbolBridge
-  (names), but not the CFI FrameBridge registers in the unwinders of the
-  process. Fix: SymbolBridge puts the same `.eh_frame` with `PT_GNU_EH_FRAME`
-  into its object; with both linked, FrameBridge then has nothing to register.
 - **perf.** It reads the memfd by name after the process is gone. Fix:
-  `/tmp/perf-PID.map` lines for the symbols.
+  `/tmp/perf-PID.map` lines for the symbols, behind an explicit switch.
 - **Names of leaves.** Leaf functions without `.pdata` that are not exported
   have no symbol: their extent is unknown without disassembly.
-- **The name of the object.** `dli_fname` is `/proc/self/fd/N`; the name of
-  the DLL is in `DT_SONAME` only.
+- **libunwind and `ms_abi` functions of the host.** libunwind (1.8) stops at
+  CFI with DWARF registers above 16, which GCC makes for `ms_abi` functions
+  (xmm6–xmm15). A fix belongs to libunwind: skip such columns instead of
+  failing.

@@ -6,20 +6,26 @@
 //   - in the unwinder of libgcc (__register_frame): backtrace(), _Unwind_Backtrace() and C++ exceptions of the host
 //     pass through frames of DLLs,
 //   - in libunwind (the nongnu one, _U_dyn_register) when the process has it: unw_step() of fault handlers.
-// Both are weak references: an unwinder the process does not have is skipped.
+// Both are weak references: an unwinder the process does not have is skipped. An image ld.so already knows the CFI
+// of (inside an object of SymbolBridge.c with PT_GNU_EH_FRAME) is left to ld.so.
+//
+// The translation is also MakeLibraryFrames(), for SymbolBridge.c: it reads the PE through a function, so it works
+// on a mapped image and on a file alike.
 //
 // Gaps of executable sections not covered by .pdata are leaf functions, as for the unwinder of Windows: the return
-// address is at [rsp]. Names of frames come from GetLibraryAddressName() of the loader.
+// address is at [rsp]. Epilogues are not in UNWIND_INFO (Windows recognizes them by code, they are canonical):
+// FrameBridge finds them the same way and gives each one rows of its own, so a fault inside an epilogue unwinds too.
 //
-// Limits: epilogues are not described (Windows recognizes them by the code), so a fault inside an epilogue gives one
-// wrong frame; nonvolatile XMM registers are not described, the System V caller does not keep them anyway;
-// UWOP_PUSH_MACHFRAME (interrupt frames of drivers) leaves its function without an FDE
+// Limits: nonvolatile XMM registers are not described: the System V caller does not keep them anyway, and libunwind
+// refuses DWARF registers above 16; UWOP_PUSH_MACHFRAME (interrupt frames of drivers) leaves its function without an
+// FDE, a warning names it
 
 #define _GNU_SOURCE
 
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <link.h>
 #include <sys/mman.h>
 
 #include "LoadLibrary.h"
@@ -127,8 +133,24 @@ struct Bridge
 
 static struct Bridge* Bridges = NULL;
 
-static uint8_t* GetPointer(struct Module* image, uint64_t address, uint64_t length)
+// The PE as the translation sees it: a mapped image or a file
+
+struct Source
 {
+  struct Module* image;              // Name and report
+  LibraryResolveFunction resolve;
+  void* context;
+  uint32_t size;                     // SizeOfImage
+};
+
+static const uint8_t* Resolve(struct Source* source, uint64_t address, uint64_t length)
+{
+  return ((address <= source->size) && (length <= source->size - address)) ? source->resolve(source->context, address, length) : NULL;
+}
+
+static const uint8_t* ResolveImage(void* context, uint32_t address, uint32_t length)
+{
+  struct Module* image = (struct Module*)context;
   return ((address <= image->size) && (length <= image->size - address)) ? image->base + address : NULL;
 }
 
@@ -203,7 +225,7 @@ static void CloseEntry(struct Buffer* buffer, size_t start)
 // Operations of an UNWIND_INFO in the order of the prolog. A chained one (UNW_FLAG_CHAININFO) continues the function
 // of its parent: the operations of the parent come first and are in effect from the start of the fragment
 
-static int ReadUnwindInfo(struct Module* image, uint32_t address, struct Operation* list, int* count, int depth, int chained)
+static int ReadUnwindInfo(struct Source* source, uint32_t address, struct Operation* list, int* count, int depth, int chained)
 {
   struct Operation operations[256];
   const uint8_t* information;
@@ -216,18 +238,18 @@ static int ReadUnwindInfo(struct Module* image, uint32_t address, struct Operati
   uint8_t info;
 
   if ((depth > CHAIN_DEPTH) ||
-      ((information = GetPointer(image, address, 4)) == NULL) ||
+      ((information = Resolve(source, address, 4)) == NULL) ||
       (((information[0] & 7) != 1) && ((information[0] & 7) != 2)))
     return -1;
 
   total = information[2];
   codes = information + 4;
 
-  if (GetPointer(image, address, 4 + 2 * ((total + 1) & ~1) + ((information[0] >> 3) & UNW_FLAG_CHAININFO) * 3) == NULL)
+  if (Resolve(source, address, 4 + 2 * ((total + 1) & ~1) + ((information[0] >> 3) & UNW_FLAG_CHAININFO) * 3) == NULL)
     return -1;
 
   if (((information[0] >> 3) & UNW_FLAG_CHAININFO) &&
-      (ReadUnwindInfo(image, READ32(codes + 2 * ((total + 1) & ~1) + 8), list, count, depth + 1, 1) < 0))
+      (ReadUnwindInfo(source, READ32(codes + 2 * ((total + 1) & ~1) + 8), list, count, depth + 1, 1) < 0))
     return -1;
 
   number = 0;
@@ -471,7 +493,7 @@ static uint32_t MatchEpilogue(const uint8_t* code, uint32_t length, uint32_t pos
 // Saves (UWOP_SAVE_NONVOL) are relative to the frame base of Windows: RSP at UWOP_SET_FPREG when there is a frame
 // register, RSP after the whole prolog otherwise. Epilogues get rows of their own
 
-static int PutInstructions(struct Buffer* buffer, struct Module* image, const struct Range* range, const struct Operation* list, int count)
+static int PutInstructions(struct Buffer* buffer, struct Source* source, const struct Range* range, const struct Operation* list, int count)
 {
   struct Step steps[24];
   struct Shape shape;
@@ -597,10 +619,10 @@ static int PutInstructions(struct Buffer* buffer, struct Module* image, const st
 
   // Epilogues, after the prolog. More pushes than a pattern can hold: no rows, as before
 
-  code   = image->base + range->begin;
   length = range->end - range->begin;
+  code   = Resolve(source, range->begin, length);
 
-  for (position = location; (shape.count <= 16) && (position < length); position += (size > 0) ? size : 1)
+  for (position = location; (code != NULL) && (shape.count <= 16) && (position < length); position += (size > 0) ? size : 1)
   {
     if ((size = MatchEpilogue(code, length, position, &shape, steps, &number)) == 0)
       continue;
@@ -656,8 +678,9 @@ static int CompareRanges(const void* first, const void* second)
 
 // Functions of .pdata and the gaps of executable sections between them (leaves), sorted
 
-static struct Range* GetRanges(struct Module* image, size_t* count)
+static struct Range* GetRanges(struct Source* source, size_t* count)
 {
+  const uint8_t* field;
   const uint8_t* header;
   const uint8_t* optional;
   const uint8_t* section;
@@ -672,21 +695,22 @@ static struct Range* GetRanges(struct Module* image, size_t* count)
   size_t index;
   int sections;
 
-  if (((header = GetPointer(image, READ32(image->base + 0x3c), 24)) == NULL) ||
-      ((optional = GetPointer(image, header + 24 - image->base, READ16(header + 20))) == NULL) ||
+  if (((field = Resolve(source, 0x3c, 4)) == NULL) ||
+      ((header = Resolve(source, READ32(field), 24)) == NULL) ||
+      ((optional = Resolve(source, READ32(field) + 24, READ16(header + 20))) == NULL) ||
       (READ16(header + 20) < 112 + 8 * 4))
     return NULL;
 
   sections = READ16(header + 6);
 
-  if (GetPointer(image, optional + READ16(header + 20) - image->base, 40 * sections) == NULL)
+  if (Resolve(source, READ32(field) + 24 + READ16(header + 20), 40 * sections) == NULL)
     return NULL;
 
   address   = READ32(optional + 112 + 8 * 3);
   length    = READ32(optional + 112 + 8 * 3 + 4);
   functions = length / 12;
 
-  if ((table = GetPointer(image, address, length)) == NULL)
+  if ((table = Resolve(source, address, length)) == NULL)
     functions = 0;
 
   // A gap per function at most, and one more per section
@@ -703,7 +727,7 @@ static struct Range* GetRanges(struct Module* image, size_t* count)
     ranges[number].unwind = READ32(table + 12 * index + 8);
 
     if ((ranges[number].begin < ranges[number].end) &&
-        (ranges[number].end <= image->size))
+        (ranges[number].end <= source->size))
       number ++;
   }
 
@@ -719,7 +743,7 @@ static struct Range* GetRanges(struct Module* image, size_t* count)
     limit  = cursor + READ32(section + 8);
 
     if ((limit < cursor) ||
-        (limit > image->size))
+        (limit > source->size))
       continue;
 
     for (index = 0; (index < functions) && (cursor < limit); index ++)
@@ -750,103 +774,158 @@ static struct Range* GetRanges(struct Module* image, size_t* count)
   return ranges;
 }
 
-// .eh_frame of the image: one CIE, an FDE per range (absolute pointers), the terminator; and the search table
+// .eh_frame: one CIE, an FDE per range, the terminator. Pointers to code are absolute (origin is the address of the
+// image) or relative to themselves (origin is the RVA the frames will have, the image and the frames move together).
+// The table gets the RVA of each function and the offset of its FDE in the frames
 
-static uint8_t* MakeFrame(struct Module* image, size_t* size, size_t* frames, size_t* entries)
+static int BuildFrames(struct Source* source, int relative, uint64_t origin, struct Buffer* buffer, struct Entry** table, size_t* count)
 {
+  struct Module* image;
   struct Operation* list;
   struct Range* ranges;
-  struct Buffer buffer;
-  struct Entry* table;
-  uint8_t* mapping;
-  uint8_t* hint;
   uint64_t value;
   size_t number;
   size_t offset;
   size_t start;
-  size_t count;
   int operations;
 
-  memset(&buffer, 0, sizeof(buffer));
+  image  = source->image;
+  *count = 0;
 
-  if ((ranges = GetRanges(image, &number)) == NULL)
-    return NULL;
+  if ((ranges = GetRanges(source, &number)) == NULL)
+    return -1;
 
-  list  = (struct Operation*)malloc(OPERATION_COUNT * sizeof(struct Operation));
-  table = (struct Entry*)malloc((number + 1) * sizeof(struct Entry));
+  list   = (struct Operation*)malloc(OPERATION_COUNT * sizeof(struct Operation));
+  *table = (struct Entry*)malloc((number + 1) * sizeof(struct Entry));
 
-  if ((list  == NULL) ||
-      (table == NULL))
+  if ((list   == NULL) ||
+      (*table == NULL))
   {
     free(ranges);
     free(list);
-    free(table);
-    return NULL;
+    free(*table);
+    return -1;
   }
 
-  // CIE: version 1, "zR", code alignment 1, data alignment -8, return address in column 16, absolute pointers
+  // CIE: version 1, "zR", code alignment 1, data alignment -8, return address in column 16, pointers absolute
+  // (DW_EH_PE_absptr) or DW_EH_PE_pcrel | DW_EH_PE_sdata4
 
-  Put(&buffer, "\0\0\0\0" "\0\0\0\0" "\1" "zR", 12);       // length, CIE id 0, version, augmentation with its NUL
-  PutUnsigned(&buffer, 1);
-  PutSigned(&buffer, -8);
-  PutUnsigned(&buffer, DWARF_RETURN_ADDRESS);
-  PutUnsigned(&buffer, 1);
-  PutByte(&buffer, 0);
-  PutByte(&buffer, DW_CFA_def_cfa);
-  PutUnsigned(&buffer, DWARF_RSP);
-  PutUnsigned(&buffer, 8);
-  PutByte(&buffer, DW_CFA_offset | DWARF_RETURN_ADDRESS);
-  PutUnsigned(&buffer, 1);
-  CloseEntry(&buffer, 0);
+  Put(buffer, "\0\0\0\0" "\0\0\0\0" "\1" "zR", 12);        // length, CIE id 0, version, augmentation with its NUL
+  PutUnsigned(buffer, 1);
+  PutSigned(buffer, -8);
+  PutUnsigned(buffer, DWARF_RETURN_ADDRESS);
+  PutUnsigned(buffer, 1);
+  PutByte(buffer, relative * 0x1b);
+  PutByte(buffer, DW_CFA_def_cfa);
+  PutUnsigned(buffer, DWARF_RSP);
+  PutUnsigned(buffer, 8);
+  PutByte(buffer, DW_CFA_offset | DWARF_RETURN_ADDRESS);
+  PutUnsigned(buffer, 1);
+  CloseEntry(buffer, 0);
 
-  count = 0;
-
-  for (size_t index = 0; (index < number) && (buffer.failed == 0); index ++)
+  for (size_t index = 0; (index < number) && (buffer->failed == 0); index ++)
   {
     operations = 0;
 
     if ((ranges[index].unwind != 0) &&
-        (ReadUnwindInfo(image, ranges[index].unwind, list, &operations, 0, 0) < 0))
+        (ReadUnwindInfo(source, ranges[index].unwind, list, &operations, 0, 0) < 0))
     {
       image->report(LOG_WARNING, "PE image %s has unwind information FrameBridge does not translate at 0x%x, its frames stop unwinding\n", image->name, ranges[index].begin);
       continue;
     }
 
-    start = buffer.length;
-    Put(&buffer, "\0\0\0\0", 4);
-    offset = buffer.length;                                       // CIE pointer: distance back to the CIE
-    Put(&buffer, &offset, 4);
-    value = (uint64_t)(image->base + ranges[index].begin);
-    Put(&buffer, &value, 8);
-    value = ranges[index].end - ranges[index].begin;
-    Put(&buffer, &value, 8);
-    PutUnsigned(&buffer, 0);
+    start = buffer->length;
+    Put(buffer, "\0\0\0\0", 4);
+    offset = buffer->length;                                      // CIE pointer: distance back to the CIE
+    Put(buffer, &offset, 4);
 
-    if (PutInstructions(&buffer, image, ranges + index, list, operations) < 0)
+    if (relative)
+    {
+      value = (uint64_t)ranges[index].begin - (origin + buffer->length);
+      Put(buffer, &value, 4);
+      value = ranges[index].end - ranges[index].begin;
+      Put(buffer, &value, 4);
+    }
+    else
+    {
+      value = origin + ranges[index].begin;
+      Put(buffer, &value, 8);
+      value = ranges[index].end - ranges[index].begin;
+      Put(buffer, &value, 8);
+    }
+
+    PutUnsigned(buffer, 0);
+
+    if (PutInstructions(buffer, source, ranges + index, list, operations) < 0)
     {
       image->report(LOG_WARNING, "PE image %s has unwind information FrameBridge does not translate at 0x%x, its frames stop unwinding\n", image->name, ranges[index].begin);
-      buffer.length = start;
+      buffer->length = start;
       continue;
     }
 
-    CloseEntry(&buffer, start);
+    CloseEntry(buffer, start);
 
-    table[count].start = ranges[index].begin;
-    table[count].frame = start;                                   // Relative to the frame for now
-    count ++;
+    (*table)[*count].start = ranges[index].begin;
+    (*table)[*count].frame = start;
+    (*count) ++;
   }
 
-  Put(&buffer, "\0\0\0\0", 4);
+  Put(buffer, "\0\0\0\0", 4);
 
   free(ranges);
   free(list);
 
-  if (buffer.failed != 0)
+  if (buffer->failed != 0)
   {
-    free(buffer.data);
-    free(table);
-    return NULL;
+    free(buffer->data);
+    free(*table);
+    return -1;
   }
+
+  return 0;
+}
+
+uint8_t* MakeLibraryFrames(struct Module* image, LibraryResolveFunction resolve, void* context, uint32_t origin, size_t* length, uint32_t** table, size_t* count)
+{
+  struct Source source;
+  struct Buffer buffer;
+  struct Entry* entries;
+
+  source.image   = image;
+  source.resolve = resolve;
+  source.context = context;
+  source.size    = image->size;
+
+  memset(&buffer, 0, sizeof(buffer));
+
+  if (BuildFrames(&source, 1, origin, &buffer, &entries, count) < 0)
+    return NULL;
+
+  *length = buffer.length;
+  *table  = (uint32_t*)entries;
+  return buffer.data;
+}
+
+// .eh_frame with absolute pointers and the search table of libunwind, mapped next to the image
+
+static uint8_t* MakeFrame(struct Module* image, size_t* size, size_t* frames, size_t* entries)
+{
+  struct Source source;
+  struct Buffer buffer;
+  struct Entry* table;
+  uint8_t* mapping;
+  uint8_t* hint;
+  size_t count;
+
+  source.image   = image;
+  source.resolve = ResolveImage;
+  source.context = image;
+  source.size    = image->size;
+
+  memset(&buffer, 0, sizeof(buffer));
+
+  if (BuildFrames(&source, 0, (uint64_t)image->base, &buffer, &table, &count) < 0)
+    return NULL;
 
   // Next to the image: the search table of libunwind keeps 32-bit offsets from the image base
 
@@ -900,6 +979,27 @@ static uint8_t* MakeFrame(struct Module* image, size_t* size, size_t* frames, si
   return mapping;
 }
 
+// ld.so knows the CFI of the image already: an object with PT_GNU_EH_FRAME covers it (SymbolBridge.c)
+
+static int FindKnownFrames(struct dl_phdr_info* information, size_t size, void* argument)
+{
+  uintptr_t address = (uintptr_t)argument;
+  int covered = 0;
+  int framed  = 0;
+
+  for (int index = 0; index < information->dlpi_phnum; index ++)
+  {
+    const ElfW(Phdr)* program = information->dlpi_phdr + index;
+
+    covered |= (program->p_type == PT_LOAD) &&
+               (address >= information->dlpi_addr + program->p_vaddr) &&
+               (address <  information->dlpi_addr + program->p_vaddr + program->p_memsz);
+    framed  |= (program->p_type == PT_GNU_EH_FRAME);
+  }
+
+  return covered && framed;
+}
+
 static void Register(struct Module* image)
 {
   struct Bridge* bridge;
@@ -908,7 +1008,8 @@ static void Register(struct Module* image)
   uint8_t* lowest;
   uint8_t* highest;
 
-  if ((bridge = (struct Bridge*)calloc(1, sizeof(struct Bridge))) == NULL)
+  if ((dl_iterate_phdr(FindKnownFrames, image->base) != 0) ||
+      ((bridge = (struct Bridge*)calloc(1, sizeof(struct Bridge))) == NULL))
     return;
 
   if ((bridge->frame = MakeFrame(image, &bridge->size, &frames, &entries)) == NULL)
