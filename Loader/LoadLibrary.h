@@ -67,8 +67,8 @@ void UnregisterLibraryProvider(struct LibraryProvider* provider);
 
 #define LIBRARY_PROVIDER(identifier, module, imports)                                                              \
   static struct LibraryProvider identifier = { module, imports, NULL };                                            \
-  static void __attribute__((constructor)) Register##identifier(void) { RegisterLibraryProvider(&identifier); }    \
-  static void __attribute__((destructor)) Unregister##identifier(void) { UnregisterLibraryProvider(&identifier); }
+  static void __attribute__((constructor)) Register##identifier() { RegisterLibraryProvider(&identifier); }    \
+  static void __attribute__((destructor)) Unregister##identifier() { UnregisterLibraryProvider(&identifier); }
 
 // Lookup in registered providers (step 2), NULL when not found
 
@@ -147,8 +147,8 @@ void UnregisterLibraryObserver(struct LibraryObserver* observer);
 
 #define LIBRARY_OBSERVER(identifier, function)                                                                     \
   static struct LibraryObserver identifier = { NULL, function };                                                   \
-  static void __attribute__((constructor)) Register##identifier(void) { RegisterLibraryObserver(&identifier); }    \
-  static void __attribute__((destructor)) Unregister##identifier(void) { UnregisterLibraryObserver(&identifier); }
+  static void __attribute__((constructor)) Register##identifier() { RegisterLibraryObserver(&identifier); }    \
+  static void __attribute__((destructor)) Unregister##identifier() { UnregisterLibraryObserver(&identifier); }
 
 // For observers: DWARF CFI (.eh_frame) of the unwind information of an image, the PE read through resolve() (an RVA
 // of the image to a pointer, NULL when it is out of the file or the image), pointers to code relative to themselves
@@ -180,7 +180,7 @@ void* GetProcAddress(struct Module* image, const char* name);
 // It also brings the thread up to date: TLS blocks of new modules, DLL_THREAD_ATTACH of new attachments.
 // Returns 0 on success
 
-int PrepareLibraryThread(void);
+int PrepareLibraryThread();
 
 // Runs the initialization of the image in the calling thread: dependencies first, then TLS callbacks and DllMain
 // with DLL_PROCESS_ATTACH. LoadLibrary() never runs code of a DLL, a DLL that needs its CRT initialized is
@@ -193,7 +193,7 @@ int AttachLibrary(struct Module* image);
 // For providers: a function called at the exit of every prepared thread, after DLL_THREAD_DETACH and before its
 // TLS blocks and TEB are freed (DLL code still sees its TEB). Up to 8 functions, returns 0 on success
 
-typedef void (*LibraryThreadExit)(void);
+typedef void (*LibraryThreadExit)();
 
 int RegisterLibraryThreadExit(LibraryThreadExit function);
 
@@ -210,8 +210,8 @@ struct Module* GetLibraryByName(const char* name);
 #define LIBRARY_TEB_TLS_SLOT_COUNT  64
 #define LIBRARY_PEB_PROCESS_HEAP    0x0030
 
-uint8_t* GetLibraryTEB(void);
-uint8_t* GetLibraryPEB(void);
+uint8_t* GetLibraryTEB();
+uint8_t* GetLibraryPEB();
 
 // Replace exactly one occurrence of the pattern inside executable sections, returns count of found occurrences
 // Protection of the page is lifted for the write and restored
@@ -232,7 +232,7 @@ int PatchLibrary(struct Module* image, const uint8_t* pattern, const uint8_t* re
 #define LIBRARY_ERROR_ENTRY          8   // DllMain returned FALSE (AttachLibrary)
 #define LIBRARY_ERROR_SYSTEM         9   // The system refused memory or a thread
 
-int GetLibraryLastError(void);
+int GetLibraryLastError();
 const char* GetLibraryErrorText(int error);
 
 // Imports of the image bound to the aborting thunk: missing in providers and dependencies, or forbidden

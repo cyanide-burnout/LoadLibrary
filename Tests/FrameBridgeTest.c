@@ -178,7 +178,7 @@ static void HandleTrap(int number, siginfo_t* information, void* context)
   siglongjmp(Jump, 1);
 }
 
-int __attribute__((noinline)) RunTrap(void)
+int __attribute__((noinline)) RunTrap()
 {
   if (sigsetjmp(Jump, 1) == 0)
     Outer(Export("Trap"), 0);

@@ -23,7 +23,7 @@
 #define DEPTH  64
 
 typedef int (LIBRARY_ABI *UnaryFunction)(int value);
-typedef int (LIBRARY_ABI *NullaryFunction)(void);
+typedef int (LIBRARY_ABI *NullaryFunction)();
 typedef int (LIBRARY_ABI *OuterFunction)(void* callback, int value);
 
 static int failures = 0;

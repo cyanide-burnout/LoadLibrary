@@ -18,7 +18,7 @@
 
 typedef int (LIBRARY_ABI *UnaryFunction)(int value);
 typedef int (LIBRARY_ABI *BinaryFunction)(int value1, int value2);
-typedef uint32_t (LIBRARY_ABI *IdentifierFunction)(void);
+typedef uint32_t (LIBRARY_ABI *IdentifierFunction)();
 
 #define CHECK(condition)  do { if (!(condition)) { fprintf(stderr, "FAIL %s:%d %s\n", __FILE__, __LINE__, #condition); failures ++; } else checks ++; } while (0)
 
@@ -40,7 +40,7 @@ static void Report(int priority, const char* format, ...)
   va_end(arguments);
 }
 
-static uint32_t LIBRARY_ABI FakeProcessId(void)
+static uint32_t LIBRARY_ABI FakeProcessId()
 {
   return 4242;
 }
@@ -120,24 +120,24 @@ static int RunChild(void* function)
 
 // TEB of a thread with a small stack: Huge() has to stop at its guard page
 
-static void* (LIBRARY_ABI *GetSelfFunction)(void);
-static uint32_t (LIBRARY_ABI *BigFunction)(void);
+static void* (LIBRARY_ABI *GetSelfFunction)();
+static uint32_t (LIBRARY_ABI *BigFunction)();
 
 static void* RunSmallStack(void* argument)
 {
-  void* (*function)(void) = (void* (*)(void))argument;
+  void* (*function)() = (void* (*)())argument;
   PrepareLibraryThread();
   return function ? function() : (void*)(uintptr_t)BigFunction();
 }
 
-static uint32_t (LIBRARY_ABI *HugeFunction)(void);
+static uint32_t (LIBRARY_ABI *HugeFunction)();
 
-static void* CallHuge(void)
+static void* CallHuge()
 {
   return (void*)(uintptr_t)HugeFunction();
 }
 
-static uint32_t LIBRARY_ABI OverflowSmallStack(void)
+static uint32_t LIBRARY_ABI OverflowSmallStack()
 {
   pthread_t thread;
   pthread_attr_t attributes;
@@ -184,7 +184,7 @@ static int FindNote(int who, int reason)
   return -1;
 }
 
-static uint64_t (LIBRARY_ABI *GetTlsFunction)(void);
+static uint64_t (LIBRARY_ABI *GetTlsFunction)();
 static void (LIBRARY_ABI *SetTlsFunction)(uint64_t value);
 static sem_t Loaded, Checked;
 
@@ -563,11 +563,11 @@ int main(int argc, char** argv)
     module = LoadLibrary(teb, NULL, Report);
     CHECK(module != NULL);
 
-    GetSelfFunction = (void* (LIBRARY_ABI *)(void))GetProcAddress(module, "GetSelf");
-    BigFunction     = (uint32_t (LIBRARY_ABI *)(void))GetProcAddress(module, "Big");
-    HugeFunction    = (uint32_t (LIBRARY_ABI *)(void))GetProcAddress(module, "Huge");
-    void* (LIBRARY_ABI *limit)(void) = (void* (LIBRARY_ABI *)(void))GetProcAddress(module, "GetLimit");
-    uint32_t (LIBRARY_ABI *thread)(void) = (uint32_t (LIBRARY_ABI *)(void))GetProcAddress(module, "GetThread");
+    GetSelfFunction = (void* (LIBRARY_ABI *)())GetProcAddress(module, "GetSelf");
+    BigFunction     = (uint32_t (LIBRARY_ABI *)())GetProcAddress(module, "Big");
+    HugeFunction    = (uint32_t (LIBRARY_ABI *)())GetProcAddress(module, "Huge");
+    void* (LIBRARY_ABI *limit)() = (void* (LIBRARY_ABI *)())GetProcAddress(module, "GetLimit");
+    uint32_t (LIBRARY_ABI *thread)() = (uint32_t (LIBRARY_ABI *)())GetProcAddress(module, "GetThread");
 
     CHECK(RunChild((void*)GetSelfFunction) == SIGSEGV);                              // no TEB yet: gs base is 0
     CHECK(PrepareLibraryThread() == 0);
@@ -605,23 +605,23 @@ int main(int argc, char** argv)
     CHECK(PrepareLibraryThread() == 0);
 
     void (LIBRARY_ABI *setError)(uint32_t) = (void (LIBRARY_ABI *)(uint32_t))FindLibraryImport("KERNEL32.dll", "SetLastError")->function;
-    uint32_t (LIBRARY_ABI *getError)(void) = (uint32_t (LIBRARY_ABI *)(void))FindLibraryImport("KERNEL32.dll", "GetLastError")->function;
-    uint32_t (LIBRARY_ABI *allocate)(void) = (uint32_t (LIBRARY_ABI *)(void))FindLibraryImport("KERNEL32.dll", "TlsAlloc")->function;
+    uint32_t (LIBRARY_ABI *getError)() = (uint32_t (LIBRARY_ABI *)())FindLibraryImport("KERNEL32.dll", "GetLastError")->function;
+    uint32_t (LIBRARY_ABI *allocate)() = (uint32_t (LIBRARY_ABI *)())FindLibraryImport("KERNEL32.dll", "TlsAlloc")->function;
     int32_t (LIBRARY_ABI *setSlot)(uint32_t, void*) = (int32_t (LIBRARY_ABI *)(uint32_t, void*))FindLibraryImport("KERNEL32.dll", "TlsSetValue")->function;
     void* (LIBRARY_ABI *getSlot)(uint32_t) = (void* (LIBRARY_ABI *)(uint32_t))FindLibraryImport("KERNEL32.dll", "TlsGetValue")->function;
-    void* (LIBRARY_ABI *heap)(void) = (void* (LIBRARY_ABI *)(void))FindLibraryImport("KERNEL32.dll", "GetProcessHeap")->function;
+    void* (LIBRARY_ABI *heap)() = (void* (LIBRARY_ABI *)())FindLibraryImport("KERNEL32.dll", "GetProcessHeap")->function;
 
     setError(1234);
-    CHECK(((uint32_t (LIBRARY_ABI *)(void))GetProcAddress(module, "GetLastErrorInline"))() == 1234);  // gs:[0x68]
+    CHECK(((uint32_t (LIBRARY_ABI *)())GetProcAddress(module, "GetLastErrorInline"))() == 1234);  // gs:[0x68]
     CHECK(getError() == 1234);
 
     uint32_t slot = allocate();
     CHECK(slot == 0);
     CHECK(setSlot(slot, (void*)0xabcd) == 1);
-    CHECK(((void* (LIBRARY_ABI *)(void))GetProcAddress(module, "GetTlsSlot0"))() == (void*)0xabcd);    // gs:[0x1480]
+    CHECK(((void* (LIBRARY_ABI *)())GetProcAddress(module, "GetTlsSlot0"))() == (void*)0xabcd);    // gs:[0x1480]
     CHECK(getSlot(slot) == (void*)0xabcd);
 
-    uint8_t* peb = ((uint8_t* (LIBRARY_ABI *)(void))GetProcAddress(module, "GetPeb"))();
+    uint8_t* peb = ((uint8_t* (LIBRARY_ABI *)())GetProcAddress(module, "GetPeb"))();
     CHECK((peb != NULL) && (*(uint32_t*)(peb + 0x118) == 10) && (*(void**)(peb + 0x30) == heap()));
     FreeLibrary(module);
   }
@@ -643,12 +643,12 @@ int main(int argc, char** argv)
     snprintf(path, sizeof(path), "%s/U.dll", argv[1]);
     module = LoadLibrary(path, test, Report);
     CHECK((module != NULL) && (module->slot >= 0));
-    GetTlsFunction = (uint64_t (LIBRARY_ABI *)(void))GetProcAddress(module, "GetTls");
+    GetTlsFunction = (uint64_t (LIBRARY_ABI *)())GetProcAddress(module, "GetTls");
     SetTlsFunction = (void (LIBRARY_ABI *)(uint64_t))GetProcAddress(module, "SetTls");
 
     CHECK(PrepareLibraryThread() == 0);
     CHECK(GetTlsFunction() == 0x1122334455667788ULL);
-    CHECK(((uint64_t (LIBRARY_ABI *)(void))GetProcAddress(module, "GetZero"))() == 0);
+    CHECK(((uint64_t (LIBRARY_ABI *)())GetProcAddress(module, "GetZero"))() == 0);
     SetTlsFunction(5);
     CHECK(GetTlsFunction() == 5);
 
@@ -671,7 +671,7 @@ int main(int argc, char** argv)
     CHECK((FindNote(1, 1) >= 0) && (FindNote(2, 1) > FindNote(1, 1)) && (FindNote(3, 1) > FindNote(2, 1)));  // U callback, U DllMain, W DllMain
     CHECK(AttachLibrary(dependent) == 0);
     CHECK(CountNotes(3, 1) == 1);                                                         // once
-    CHECK(((uint64_t (LIBRARY_ABI *)(void))GetProcAddress(dependent, "Value"))() == 5);   // W -> U!GetTls
+    CHECK(((uint64_t (LIBRARY_ABI *)())GetProcAddress(dependent, "Value"))() == 5);   // W -> U!GetTls
 
     pthread_create(&worker, NULL, AttachThread, NULL);
     pthread_join(worker, NULL);

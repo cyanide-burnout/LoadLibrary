@@ -149,7 +149,7 @@ static void GetDirectory(struct Layout* layout, uint32_t index, uint32_t* addres
 
 static __thread int LibraryError = LIBRARY_ERROR_NONE;
 
-int GetLibraryLastError(void)
+int GetLibraryLastError()
 {
   return LibraryError;
 }
@@ -258,7 +258,7 @@ static void NotifyModule(struct Module* image, uint32_t reason)
 // Called with LibraryLock, LibraryTEB is set: TLS blocks follow owners of indexes, attachments made after the last
 // synchronization are notified with DLL_THREAD_ATTACH
 
-static void SynchronizeThread(void)
+static void SynchronizeThread()
 {
   struct Module* image;
   void** blocks;
@@ -331,7 +331,7 @@ static void ReleaseTEB(void* argument)
   LibraryTEB = NULL;
 }
 
-static void InitializeEnvironment(void)
+static void InitializeEnvironment()
 {
   LibraryPEB[PEB_BEING_DEBUGGED] = 0;
 
@@ -359,18 +359,18 @@ int RegisterLibraryThreadExit(LibraryThreadExit function)
   return (index < EXIT_FUNCTION_COUNT) ? 0 : -1;
 }
 
-uint8_t* GetLibraryTEB(void)
+uint8_t* GetLibraryTEB()
 {
   return LibraryTEB;
 }
 
-uint8_t* GetLibraryPEB(void)
+uint8_t* GetLibraryPEB()
 {
   pthread_once(&LibraryOnce, InitializeEnvironment);
   return LibraryPEB;
 }
 
-int PrepareLibraryThread(void)
+int PrepareLibraryThread()
 {
   pthread_attr_t attributes;
   uint8_t* block;
@@ -448,7 +448,7 @@ int PrepareLibraryThread(void)
 
 // Bumps the generation: every thread synchronizes on its next PrepareLibraryThread()
 
-static void ChangeEnvironment(void)
+static void ChangeEnvironment()
 {
   __atomic_add_fetch(&Generation, 1, __ATOMIC_RELEASE);
 }
@@ -1684,7 +1684,7 @@ static void DestroyModule(struct Module* image)
 // of other modules. A module is alive when it has outside references or an alive module depends on it.
 // The rest goes away at once, cycles of dependencies included
 
-static void CollectModules(void)
+static void CollectModules()
 {
   struct Module* image;
   struct Module* garbage;

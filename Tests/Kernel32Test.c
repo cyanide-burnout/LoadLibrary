@@ -68,17 +68,17 @@ static void* FlsThread(void* argument)
 
 int main()
 {
-  uint32_t (LIBRARY_ABI *getError)(void) = Find("GetLastError");
+  uint32_t (LIBRARY_ABI *getError)() = Find("GetLastError");
   void (LIBRARY_ABI *setError)(uint32_t) = Find("SetLastError");
-  uint32_t (LIBRARY_ABI *thread)(void) = Find("GetCurrentThreadId");
-  uint32_t (LIBRARY_ABI *process)(void) = Find("GetCurrentProcessId");
-  uint32_t (LIBRARY_ABI *ticks)(void) = Find("GetTickCount");
+  uint32_t (LIBRARY_ABI *thread)() = Find("GetCurrentThreadId");
+  uint32_t (LIBRARY_ABI *process)() = Find("GetCurrentProcessId");
+  uint32_t (LIBRARY_ABI *ticks)() = Find("GetTickCount");
   int32_t (LIBRARY_ABI *counterValue)(int64_t*) = Find("QueryPerformanceCounter");
   int32_t (LIBRARY_ABI *frequency)(int64_t*) = Find("QueryPerformanceFrequency");
   void (LIBRARY_ABI *sleep)(uint32_t) = Find("Sleep");
   int32_t (LIBRARY_ABI *initialize)(void*, uint32_t) = Find("InitializeCriticalSectionAndSpinCount");
   void (LIBRARY_ABI *destroy)(void*) = Find("DeleteCriticalSection");
-  void* (LIBRARY_ABI *heap)(void) = Find("GetProcessHeap");
+  void* (LIBRARY_ABI *heap)() = Find("GetProcessHeap");
   void* (LIBRARY_ABI *allocate)(void*, uint32_t, size_t) = Find("HeapAlloc");
   void* (LIBRARY_ABI *reallocate)(void*, uint32_t, void*, size_t) = Find("HeapReAlloc");
   size_t (LIBRARY_ABI *measure)(void*, uint32_t, const void*) = Find("HeapSize");

@@ -32,7 +32,7 @@
 
 static __thread uint32_t LastError = 0;
 
-static uint32_t LIBRARY_ABI GetLastError(void)
+static uint32_t LIBRARY_ABI GetLastError()
 {
   uint8_t* block = GetLibraryTEB();
   return block ? *(uint32_t*)(block + LIBRARY_TEB_LAST_ERROR) : LastError;
@@ -55,19 +55,19 @@ static void LIBRARY_ABI SetLastError(uint32_t value)
 
 // Identifiers
 
-static uint32_t LIBRARY_ABI GetCurrentThreadId(void)
+static uint32_t LIBRARY_ABI GetCurrentThreadId()
 {
   return (uint32_t)syscall(SYS_gettid);
 }
 
-static uint32_t LIBRARY_ABI GetCurrentProcessId(void)
+static uint32_t LIBRARY_ABI GetCurrentProcessId()
 {
   return (uint32_t)getpid();
 }
 
 // Time
 
-static uint32_t LIBRARY_ABI GetTickCount(void)
+static uint32_t LIBRARY_ABI GetTickCount()
 {
   struct timespec time;
   clock_gettime(CLOCK_MONOTONIC, &time);
@@ -148,7 +148,7 @@ static void LIBRARY_ABI DeleteCriticalSection(void* section)
 
 #define HEAP_HEADER  16
 
-static void* LIBRARY_ABI GetProcessHeap(void)
+static void* LIBRARY_ABI GetProcessHeap()
 {
   return PROCESS_HEAP;
 }
@@ -259,7 +259,7 @@ static void CallFlsCallback(uint32_t index)
   }
 }
 
-static void ReleaseFlsValues(void)
+static void ReleaseFlsValues()
 {
   for (uint32_t index = 0; index < FLS_SLOT_COUNT; index ++)
     CallFlsCallback(index);
@@ -284,7 +284,7 @@ static void** GetTlsSlot(uint32_t index)
   return block ? (void**)(block + LIBRARY_TEB_TLS_SLOTS) + index : TlsValues + index;
 }
 
-static uint32_t LIBRARY_ABI TlsAlloc(void)
+static uint32_t LIBRARY_ABI TlsAlloc()
 {
   return AllocateSlot(TlsTaken, LIBRARY_TEB_TLS_SLOT_COUNT);
 }
@@ -481,17 +481,17 @@ static int32_t LIBRARY_ABI DisableThreadLibraryCalls(const void* module)
 
 // Process: what the startup code of the CRT asks for
 
-static int32_t LIBRARY_ABI IsDebuggerPresent(void)
+static int32_t LIBRARY_ABI IsDebuggerPresent()
 {
   return 0;
 }
 
-static void* LIBRARY_ABI GetCurrentProcess(void)
+static void* LIBRARY_ABI GetCurrentProcess()
 {
   return (void*)(intptr_t)-1;
 }
 
-static const char* LIBRARY_ABI GetCommandLineA(void)
+static const char* LIBRARY_ABI GetCommandLineA()
 {
   return program_invocation_name;
 }
@@ -506,13 +506,13 @@ static void LIBRARY_ABI GetStartupInfoA(uint8_t* information)
 static const char EmptyEnvironment[2]      = { 0, 0 };
 static const uint16_t EmptyEnvironmentW[2] = { 0, 0 };
 
-static const char* LIBRARY_ABI GetEnvironmentStrings(void)
+static const char* LIBRARY_ABI GetEnvironmentStrings()
 {
   // The environment of the process stays out of the DLL
   return EmptyEnvironment;
 }
 
-static const uint16_t* LIBRARY_ABI GetEnvironmentStringsW(void)
+static const uint16_t* LIBRARY_ABI GetEnvironmentStringsW()
 {
   return EmptyEnvironmentW;
 }
@@ -655,17 +655,17 @@ static int32_t LIBRARY_ABI WriteFile(void* handle, const void* data, uint32_t le
 
 #define CP_UTF8                      65001
 
-static uint32_t LIBRARY_ABI GetACP(void)
+static uint32_t LIBRARY_ABI GetACP()
 {
   return 1252;
 }
 
-static uint32_t LIBRARY_ABI GetOEMCP(void)
+static uint32_t LIBRARY_ABI GetOEMCP()
 {
   return 437;
 }
 
-static uint32_t LIBRARY_ABI GetThreadLocale(void)
+static uint32_t LIBRARY_ABI GetThreadLocale()
 {
   // en-US
   return 0x0409;
@@ -1064,7 +1064,7 @@ LIBRARY_PROVIDER(Kernel32Provider, "KERNEL32.dll", Kernel32Imports)
 
 // The heap of the process in the PEB, as GetProcessHeap() returns it, and FLS callbacks at the exit of threads
 
-static void __attribute__((constructor)) InitializeKernel32(void)
+static void __attribute__((constructor)) InitializeKernel32()
 {
   *(void**)(GetLibraryPEB() + LIBRARY_PEB_PROCESS_HEAP) = PROCESS_HEAP;
   RegisterLibraryThreadExit(ReleaseFlsValues);
