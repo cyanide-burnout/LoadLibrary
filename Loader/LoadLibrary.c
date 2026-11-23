@@ -1,8 +1,10 @@
 #define _GNU_SOURCE
+#define LIBRARY_PRIVATE
 
 #include "LoadLibrary.h"
 
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -171,6 +173,29 @@ const char* GetLibraryErrorText(int error)
   }
 
   return "unknown error";
+}
+
+// Process-wide report function: stderr by default, DiscardReport() when turned off
+
+static void WriteReport(int priority, const char* format, ...)
+{
+  va_list arguments;
+
+  va_start(arguments, format);
+  vfprintf(stderr, format, arguments);
+  va_end(arguments);
+}
+
+static void DiscardReport(int priority, const char* format, ...)
+{
+
+}
+
+LibraryReportFunction LibraryReport = WriteReport;
+
+void SetLibraryReport(LibraryReportFunction function)
+{
+  __atomic_store_n(&LibraryReport, function ? function : DiscardReport, __ATOMIC_RELEASE);
 }
 
 // One recursive lock for both registries: LoadLibrary() loads dependencies recursively
@@ -466,10 +491,7 @@ static void LIBRARY_ABI __attribute__((noreturn, used)) HandleUnresolvedImport(c
     name = buffer;
   }
 
-  if (image->report != NULL)
-    image->report(LOG_CRIT, "PE image %s called unsupported import %s!%s, aborting\n", image->name, module, name);
-  else
-    dprintf(STDERR_FILENO, "PE image %s called unsupported import %s!%s, aborting\n", image->name, module, name);
+  LibraryReport(LOG_CRIT, "PE image %s called unsupported import %s!%s, aborting\n", image->name, module, name);
 
   abort();
 }
@@ -713,7 +735,7 @@ static struct Module* LoadDependency(struct Module* importer, const char* name, 
     if (access(path, R_OK) < 0)
       return NULL;
 
-    if ((image = LoadLibrary(path, providers, importer->report)) == NULL)
+    if ((image = LoadLibrary(path, providers)) == NULL)
       return NULL;
   }
 
@@ -885,7 +907,7 @@ void* GetProcAddress(struct Module* image, const char* name)
   return function;
 }
 
-static int ApplyRelocations(struct Module* image, struct Layout* layout, LibraryReport report)
+static int ApplyRelocations(struct Module* image, struct Layout* layout)
 {
   uint8_t* block;
   uint8_t* limit;
@@ -907,7 +929,7 @@ static int ApplyRelocations(struct Module* image, struct Layout* layout, Library
   {
     // Such image is mapped at its ImageBase, this is a guard
     LibraryError = LIBRARY_ERROR_UNSUPPORTED;
-    report(LOG_ERR, "PE image %s has stripped relocations\n", image->name);
+    LibraryReport(LOG_ERR, "PE image %s has stripped relocations\n", image->name);
     return -1;
   }
 
@@ -925,7 +947,7 @@ static int ApplyRelocations(struct Module* image, struct Layout* layout, Library
         (block + length > limit))
     {
       LibraryError = LIBRARY_ERROR_BROKEN;
-      report(LOG_ERR, "PE image %s has broken relocation block\n", image->name);
+      LibraryReport(LOG_ERR, "PE image %s has broken relocation block\n", image->name);
       return -1;
     }
 
@@ -943,7 +965,7 @@ static int ApplyRelocations(struct Module* image, struct Layout* layout, Library
           if (place == NULL)
           {
             LibraryError = LIBRARY_ERROR_BROKEN;
-            report(LOG_ERR, "PE image %s has relocation out of image\n", image->name);
+            LibraryReport(LOG_ERR, "PE image %s has relocation out of image\n", image->name);
             return -1;
           }
           WRITE64(place, READ64(place) + delta);
@@ -951,7 +973,7 @@ static int ApplyRelocations(struct Module* image, struct Layout* layout, Library
 
         default:
           LibraryError = LIBRARY_ERROR_UNSUPPORTED;
-          report(LOG_ERR, "PE image %s has unsupported relocation type %d\n", image->name, entry >> 12);
+          LibraryReport(LOG_ERR, "PE image %s has unsupported relocation type %d\n", image->name, entry >> 12);
           return -1;
       }
     }
@@ -991,7 +1013,7 @@ static int BindEntry(struct Module* image, struct Binding* binding, char* module
   else if ((name = GetString(image, (value & 0x7fffffff) + 2)) == NULL)
   {
     LibraryError = LIBRARY_ERROR_BROKEN;
-    image->report(LOG_ERR, "PE image %s has broken import name\n", image->name);
+    LibraryReport(LOG_ERR, "PE image %s has broken import name\n", image->name);
     return -1;
   }
 
@@ -1001,7 +1023,7 @@ static int BindEntry(struct Module* image, struct Binding* binding, char* module
       (*reported == 0))
   {
     *reported = 1;
-    image->report(LOG_WARNING, "PE image %s imports from %s, which is not found, its functions abort when called\n", image->name, module);
+    LibraryReport(LOG_WARNING, "PE image %s imports from %s, which is not found, its functions abort when called\n", image->name, module);
   }
 
   if (function == NULL)
@@ -1062,7 +1084,7 @@ static int WalkImports(struct Module* image, struct Layout* layout, struct Bindi
         (module == NULL))
     {
       LibraryError = LIBRARY_ERROR_BROKEN;
-      image->report(LOG_ERR, "PE image %s has broken import descriptor\n", image->name);
+      LibraryReport(LOG_ERR, "PE image %s has broken import descriptor\n", image->name);
       return -1;
     }
 
@@ -1090,7 +1112,7 @@ static int WalkImports(struct Module* image, struct Layout* layout, struct Bindi
     if ((READ32(descriptor + 0) & DELAY_ATTRIBUTE_RVA) == 0)
     {
       LibraryError = LIBRARY_ERROR_UNSUPPORTED;
-      image->report(LOG_ERR, "PE image %s has delayed imports in the old format (VA), not supported\n", image->name);
+      LibraryReport(LOG_ERR, "PE image %s has delayed imports in the old format (VA), not supported\n", image->name);
       return -1;
     }
 
@@ -1105,7 +1127,7 @@ static int WalkImports(struct Module* image, struct Layout* layout, struct Bindi
         (module == NULL))
     {
       LibraryError = LIBRARY_ERROR_BROKEN;
-      image->report(LOG_ERR, "PE image %s has broken delayed import descriptor\n", image->name);
+      LibraryReport(LOG_ERR, "PE image %s has broken delayed import descriptor\n", image->name);
       return -1;
     }
 
@@ -1153,7 +1175,7 @@ static int BindImports(struct Module* image, struct Layout* layout, const struct
   {
     image->thunks = NULL;
     LibraryError = LIBRARY_ERROR_SYSTEM;
-    image->report(LOG_ERR, "Error allocating thunks of PE image %s\n", image->name);
+    LibraryReport(LOG_ERR, "Error allocating thunks of PE image %s\n", image->name);
     return -1;
   }
 
@@ -1168,7 +1190,7 @@ static int BindImports(struct Module* image, struct Layout* layout, const struct
   if (mprotect(image->thunks, image->length, PROT_READ | PROT_EXEC) < 0)
   {
     LibraryError = LIBRARY_ERROR_SYSTEM;
-    image->report(LOG_ERR, "Error protecting thunks of PE image %s\n", image->name);
+    LibraryReport(LOG_ERR, "Error protecting thunks of PE image %s\n", image->name);
     return -1;
   }
 
@@ -1256,7 +1278,7 @@ static int SetUpTLS(struct Module* image, struct Layout* layout)
   if ((directory = GetAddress(image, address, 40)) == NULL)
   {
     LibraryError = LIBRARY_ERROR_BROKEN;
-    image->report(LOG_ERR, "PE image %s has broken TLS directory\n", image->name);
+    LibraryReport(LOG_ERR, "PE image %s has broken TLS directory\n", image->name);
     return -1;
   }
 
@@ -1268,7 +1290,7 @@ static int SetUpTLS(struct Module* image, struct Layout* layout)
       ((index = GetVirtualAddress(image, READ64(directory + 16), 4)) == NULL))
   {
     LibraryError = LIBRARY_ERROR_BROKEN;
-    image->report(LOG_ERR, "PE image %s has broken TLS directory\n", image->name);
+    LibraryReport(LOG_ERR, "PE image %s has broken TLS directory\n", image->name);
     return -1;
   }
 
@@ -1283,7 +1305,7 @@ static int SetUpTLS(struct Module* image, struct Layout* layout)
         (*callback != 0))
     {
       LibraryError = LIBRARY_ERROR_BROKEN;
-      image->report(LOG_ERR, "PE image %s has broken TLS callbacks\n", image->name);
+      LibraryReport(LOG_ERR, "PE image %s has broken TLS callbacks\n", image->name);
       return -1;
     }
 
@@ -1295,7 +1317,7 @@ static int SetUpTLS(struct Module* image, struct Layout* layout)
   if (slot == TLS_SLOT_COUNT)
   {
     LibraryError = LIBRARY_ERROR_TLS_INDEXES;
-    image->report(LOG_ERR, "PE image %s has TLS, but all %d indexes are taken\n", image->name, TLS_SLOT_COUNT);
+    LibraryReport(LOG_ERR, "PE image %s has TLS, but all %d indexes are taken\n", image->name, TLS_SLOT_COUNT);
     return -1;
   }
 
@@ -1339,7 +1361,7 @@ int AttachLibrary(struct Module* image)
   if (PrepareLibraryThread() < 0)
   {
     LibraryError = LIBRARY_ERROR_SYSTEM;
-    image->report(LOG_ERR, "Error preparing a thread for PE image %s\n", image->name);
+    LibraryReport(LOG_ERR, "Error preparing a thread for PE image %s\n", image->name);
     pthread_mutex_unlock(&LibraryLock);
     return -1;
   }
@@ -1351,7 +1373,7 @@ int AttachLibrary(struct Module* image)
   if (result == 0)
   {
     LibraryError = LIBRARY_ERROR_ENTRY;
-    image->report(LOG_ERR, "DllMain of PE image %s failed\n", image->name);
+    LibraryReport(LOG_ERR, "DllMain of PE image %s failed\n", image->name);
     CallTLSCallbacks(image, DLL_PROCESS_DETACH);
     pthread_mutex_unlock(&LibraryLock);
     return -1;
@@ -1430,7 +1452,7 @@ size_t GetLibraryUnresolvedImports(struct Module* image, LibraryImportCallback c
   return number;
 }
 
-struct Module* LoadLibrary(const char* path, const struct LibraryProvider* providers, LibraryReport report)
+struct Module* LoadLibrary(const char* path, const struct LibraryProvider* providers)
 {
   int handle;
   struct stat status;
@@ -1465,7 +1487,7 @@ struct Module* LoadLibrary(const char* path, const struct LibraryProvider* provi
       (fstat(handle, &status) < 0))
   {
     LibraryError = LIBRARY_ERROR_OPEN;
-    report(LOG_ERR, "Error opening PE image %s\n", path);
+    LibraryReport(LOG_ERR, "Error opening PE image %s\n", path);
     goto Failure;
   }
 
@@ -1475,7 +1497,7 @@ struct Module* LoadLibrary(const char* path, const struct LibraryProvider* provi
 
     if ((providers != NULL) &&
         (providers != image->providers))
-      report(LOG_WARNING, "PE image %s is already loaded, providers of this call are not applied\n", path);
+      LibraryReport(LOG_WARNING, "PE image %s is already loaded, providers of this call are not applied\n", path);
 
     image->count ++;
     close(handle);
@@ -1486,20 +1508,20 @@ struct Module* LoadLibrary(const char* path, const struct LibraryProvider* provi
   if ((other = FindModuleByName(name)) != NULL)
   {
     // Imports by name keep resolving to the first one
-    report(LOG_WARNING, "PE image %s has the same name as the loaded %s/%s\n", path, other->directory, other->name);
+    LibraryReport(LOG_WARNING, "PE image %s has the same name as the loaded %s/%s\n", path, other->directory, other->name);
   }
 
   if ((data = (uint8_t*)mmap(NULL, status.st_size, PROT_READ, MAP_PRIVATE, handle, 0)) == MAP_FAILED)
   {
     LibraryError = LIBRARY_ERROR_OPEN;
-    report(LOG_ERR, "Error reading PE image %s\n", path);
+    LibraryReport(LOG_ERR, "Error reading PE image %s\n", path);
     goto Failure;
   }
 
   if (GetLayout(data, status.st_size, &layout) < 0)
   {
     LibraryError = LIBRARY_ERROR_FORMAT;
-    report(LOG_ERR, "File %s is not a PE32+ x86-64 image\n", path);
+    LibraryReport(LOG_ERR, "File %s is not a PE32+ x86-64 image\n", path);
     goto Failure;
   }
 
@@ -1507,7 +1529,7 @@ struct Module* LoadLibrary(const char* path, const struct LibraryProvider* provi
   {
     // Such image may truncate pointers to 32 bits, but mappings and malloc of Linux are above 4 GB
     LibraryError = LIBRARY_ERROR_ADDRESS_AWARE;
-    report(LOG_ERR, "PE image %s is not large address aware, not supported\n", path);
+    LibraryReport(LOG_ERR, "PE image %s is not large address aware, not supported\n", path);
     goto Failure;
   }
 
@@ -1516,7 +1538,7 @@ struct Module* LoadLibrary(const char* path, const struct LibraryProvider* provi
   if (alignment == 0)
   {
     LibraryError = LIBRARY_ERROR_BROKEN;
-    report(LOG_ERR, "PE image %s has no section alignment\n", path);
+    LibraryReport(LOG_ERR, "PE image %s has no section alignment\n", path);
     goto Failure;
   }
 
@@ -1533,7 +1555,6 @@ struct Module* LoadLibrary(const char* path, const struct LibraryProvider* provi
   image->flat      = (alignment % getpagesize()) != 0;
   image->count     = 1;
   image->providers = providers;
-  image->report    = report;
   image->serial    = ++ Serial;
   image->threads   = 1;
   image->slot      = -1;
@@ -1580,12 +1601,12 @@ struct Module* LoadLibrary(const char* path, const struct LibraryProvider* provi
     if (flags & MAP_FIXED_NOREPLACE)
     {
       LibraryError = LIBRARY_ERROR_IMAGE_BASE;
-      report(LOG_ERR, "PE image %s has stripped relocations and its ImageBase 0x%llx is taken\n", path, (unsigned long long)preferred);
+      LibraryReport(LOG_ERR, "PE image %s has stripped relocations and its ImageBase 0x%llx is taken\n", path, (unsigned long long)preferred);
     }
     else
     {
       LibraryError = LIBRARY_ERROR_SYSTEM;
-      report(LOG_ERR, "Error allocating memory for PE image %s\n", path);
+      LibraryReport(LOG_ERR, "Error allocating memory for PE image %s\n", path);
     }
 
     goto Failure;
@@ -1598,7 +1619,7 @@ struct Module* LoadLibrary(const char* path, const struct LibraryProvider* provi
       (size > image->size))
   {
     LibraryError = LIBRARY_ERROR_BROKEN;
-    report(LOG_ERR, "PE image %s has broken headers\n", path);
+    LibraryReport(LOG_ERR, "PE image %s has broken headers\n", path);
     goto Failure;
   }
 
@@ -1621,7 +1642,7 @@ struct Module* LoadLibrary(const char* path, const struct LibraryProvider* provi
         ((uint64_t)offset + length > (uint64_t)status.st_size))
     {
       LibraryError = LIBRARY_ERROR_BROKEN;
-      report(LOG_ERR, "PE image %s has section out of bounds\n", path);
+      LibraryReport(LOG_ERR, "PE image %s has section out of bounds\n", path);
       goto Failure;
     }
 
@@ -1632,7 +1653,7 @@ struct Module* LoadLibrary(const char* path, const struct LibraryProvider* provi
 
   GetLayout(image->base, image->size, &layout);
 
-  if ((ApplyRelocations(image, &layout, report) < 0) ||
+  if ((ApplyRelocations(image, &layout) < 0) ||
       (BindImports(image, &layout, providers) < 0) ||
       (SetUpTLS(image, &layout) < 0))
     goto Failure;
@@ -1643,7 +1664,7 @@ struct Module* LoadLibrary(const char* path, const struct LibraryProvider* provi
   if (ProtectModule(image) < 0)
   {
     LibraryError = LIBRARY_ERROR_SYSTEM;
-    report(LOG_ERR, "Error protecting PE image %s\n", path);
+    LibraryReport(LOG_ERR, "Error protecting PE image %s\n", path);
     goto Failure;
   }
 

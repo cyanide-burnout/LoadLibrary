@@ -30,9 +30,18 @@ extern "C"
 
 #define LIBRARY_ORDINAL(number)  ((const char*)(uintptr_t)(uint16_t)(number))
 
-// Same signature as syslog(3), which can be passed as is; priorities are LOG_*
+// Reports of the loader and of FrameBridge/SymbolBridge go to one process-wide function. Same signature as
+// syslog(3), which can be passed as is; priorities are LOG_*. By default they go to stderr, NULL turns them off.
+// Meant to be set before loading, a report already in progress may still reach the previous function
 
-typedef void (*LibraryReport)(int priority, const char* format, ...);
+typedef void (*LibraryReportFunction)(int priority, const char* format, ...);
+
+void SetLibraryReport(LibraryReportFunction function);
+
+#ifdef LIBRARY_PRIVATE
+// The current function, never NULL: parts of the loader call it directly
+extern LibraryReportFunction LibraryReport;
+#endif
 
 // Copy of a string by malloc() called directly from the module, use it instead of strdup()
 // A module dlopen()ed with RTLD_DEEPBIND binds its own malloc()/free() to libc, while strdup() and other functions
@@ -87,7 +96,6 @@ struct Module
   int flat;                                 // SectionAlignment below the page size: the image is one RWX region
   int count;                                // References: LoadLibrary() calls and dependent modules
   const struct LibraryProvider* providers;  // Caller's providers of the first load, also used for forwards
-  LibraryReport report;                     // Report function of the first load
   struct Module** dependencies;             // Modules this one imports from
   size_t number;                            // Count of dependencies
   struct Module* next;                      // Registry of modules
@@ -165,7 +173,7 @@ uint8_t* MakeLibraryFrames(struct Module* image, LibraryResolveFunction resolve,
 // increased, and providers of the call are not applied (reported when they differ)
 // The image is returned with final protections of sections
 
-struct Module* LoadLibrary(const char* path, const struct LibraryProvider* providers, LibraryReport report);
+struct Module* LoadLibrary(const char* path, const struct LibraryProvider* providers);
 void FreeLibrary(struct Module* image);
 
 // name may be LIBRARY_ORDINAL(n). Forwarded exports ("OTHER.Function", "OTHER.#n") are resolved in the same

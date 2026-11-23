@@ -21,6 +21,7 @@
 // FDE, a warning names it
 
 #define _GNU_SOURCE
+#define LIBRARY_PRIVATE
 
 #include <stdlib.h>
 #include <string.h>
@@ -830,7 +831,7 @@ static int BuildFrames(struct Source* source, int relative, uint64_t origin, str
     if ((ranges[index].unwind != 0) &&
         (ReadUnwindInfo(source, ranges[index].unwind, list, &operations, 0, 0) < 0))
     {
-      image->report(LOG_WARNING, "PE image %s has unwind information FrameBridge does not translate at 0x%x, its frames stop unwinding\n", image->name, ranges[index].begin);
+      LibraryReport(LOG_WARNING, "PE image %s has unwind information FrameBridge does not translate at 0x%x, its frames stop unwinding\n", image->name, ranges[index].begin);
       continue;
     }
 
@@ -858,7 +859,7 @@ static int BuildFrames(struct Source* source, int relative, uint64_t origin, str
 
     if (PutInstructions(buffer, source, ranges + index, list, operations) < 0)
     {
-      image->report(LOG_WARNING, "PE image %s has unwind information FrameBridge does not translate at 0x%x, its frames stop unwinding\n", image->name, ranges[index].begin);
+      LibraryReport(LOG_WARNING, "PE image %s has unwind information FrameBridge does not translate at 0x%x, its frames stop unwinding\n", image->name, ranges[index].begin);
       buffer->length = start;
       continue;
     }
@@ -1014,7 +1015,7 @@ static void Register(struct Module* image)
 
   if ((bridge->frame = MakeFrame(image, &bridge->size, &frames, &entries)) == NULL)
   {
-    image->report(LOG_WARNING, "FrameBridge could not make unwind information of PE image %s\n", image->name);
+    LibraryReport(LOG_WARNING, "FrameBridge could not make unwind information of PE image %s\n", image->name);
     free(bridge);
     return;
   }
@@ -1056,7 +1057,7 @@ static void Register(struct Module* image)
       bridge->dynamic = 1;
     }
     else
-      image->report(LOG_WARNING, "FrameBridge could not place unwind information of PE image %s next to it, libunwind does not get it\n", image->name);
+      LibraryReport(LOG_WARNING, "FrameBridge could not place unwind information of PE image %s next to it, libunwind does not get it\n", image->name);
   }
 #else
   (void)lowest;

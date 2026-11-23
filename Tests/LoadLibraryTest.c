@@ -285,13 +285,15 @@ int main(int argc, char** argv)
   if (argc < 2)
     return EXIT_FAILURE;
 
+  SetLibraryReport(Report);
+
   snprintf(path, sizeof(path), "%s/A.dll", argv[1]);
   snprintf(other, sizeof(other), "%s/B.dll", argv[1]);
 
   // 1. Dependencies, forwarded export, registered provider (Kernel32.c), relocation
 
   fprintf(stderr, "1. A.dll with dependencies\n");
-  module = LoadLibrary(path, NULL, Report);
+  module = LoadLibrary(path, NULL);
   CHECK(module != NULL);
 
   if (module == NULL)
@@ -307,7 +309,7 @@ int main(int argc, char** argv)
 
   // B.dll is shared with A.dll, and survives our FreeLibrary() while A.dll holds it
 
-  shared = LoadLibrary(other, NULL, Report);
+  shared = LoadLibrary(other, NULL);
   CHECK((shared != NULL) && (shared == module->dependencies[0]));
   CHECK(shared->count == 2);
   CHECK(((BinaryFunction)GetProcAddress(shared, "Add"))(2, 3) == 5);
@@ -335,10 +337,10 @@ int main(int argc, char** argv)
     const struct LibraryImport imports[] = { { "GetCurrentProcessId", (void*)FakeProcessId }, { NULL, NULL } };
     const struct LibraryProvider providers[] = { { "KERNEL32.dll", imports, NULL }, { NULL, NULL, NULL } };
 
-    module = LoadLibrary(path, providers, Report);
+    module = LoadLibrary(path, providers);
     CHECK(module != NULL);
     CHECK(((IdentifierFunction)GetProcAddress(module, "Pid"))() == 4242);
-    shared = LoadLibrary(other, NULL, Report);
+    shared = LoadLibrary(other, NULL);
     CHECK(((IdentifierFunction)GetProcAddress(shared, "Pid"))() == 4242);    // dependency inherited the provider
     FreeLibrary(shared);
     FreeLibrary(module);
@@ -351,7 +353,7 @@ int main(int argc, char** argv)
     const struct LibraryImport imports[] = { { "GetCurrentProcessId", NULL }, { NULL, NULL } };
     const struct LibraryProvider providers[] = { { "KERNEL32.dll", imports, NULL }, { NULL, NULL, NULL } };
 
-    module = LoadLibrary(path, providers, Report);
+    module = LoadLibrary(path, providers);
     CHECK(RunChild(GetProcAddress(module, "Pid")) == SIGABRT);
     FreeLibrary(module);
   }
@@ -367,7 +369,7 @@ int main(int argc, char** argv)
     RegisterLibraryProvider(&provider);
     CHECK(FindLibraryImport("B.dll", "Add") == imports + 1);
 
-    module = LoadLibrary(path, NULL, Report);
+    module = LoadLibrary(path, NULL);
     CHECK(module != NULL);
     CHECK(module->number == 1);                                                // B.dll was loaded for Mul
     CHECK(((UnaryFunction)GetProcAddress(module, "Twice"))(7) == 707);        // Add from the provider
@@ -376,8 +378,8 @@ int main(int argc, char** argv)
 
     // B.dll loaded first, then A.dll imports from it: the same overlay over the already loaded module
 
-    shared = LoadLibrary(other, NULL, Report);
-    module = LoadLibrary(path, NULL, Report);
+    shared = LoadLibrary(other, NULL);
+    module = LoadLibrary(path, NULL);
     CHECK((module->number == 1) && (module->dependencies[0] == shared));
     CHECK(shared->count == 2);
     CHECK(((UnaryFunction)GetProcAddress(module, "Twice"))(3) == 303);
@@ -397,7 +399,7 @@ int main(int argc, char** argv)
     const struct LibraryImport imports[] = { { "Mul", NULL }, { NULL, NULL } };
     const struct LibraryProvider providers[] = { { "B.dll", imports, NULL }, { NULL, NULL, NULL } };
 
-    module = LoadLibrary(path, providers, Report);
+    module = LoadLibrary(path, providers);
     CHECK(((UnaryFunction)GetProcAddress(module, "Twice"))(4) == 8);
     CHECK(RunChild(GetProcAddress(module, "Square")) == SIGABRT);
     FreeLibrary(module);
@@ -406,14 +408,14 @@ int main(int argc, char** argv)
   // 6. After unregistering, B.dll comes from disk again
 
   fprintf(stderr, "6. After unregistering\n");
-  module = LoadLibrary(path, NULL, Report);
+  module = LoadLibrary(path, NULL);
   CHECK(((UnaryFunction)GetProcAddress(module, "Twice"))(7) == 14);
   FreeLibrary(module);
 
   // Repeated lookups of a forwarded export keep one reference to its module
 
   fprintf(stderr, "6a. Forwards\n");
-  shared = LoadLibrary(other, NULL, Report);
+  shared = LoadLibrary(other, NULL);
   for (int index = 0; index < 10; index ++)
     GetProcAddress(shared, "Mul");
   CHECK((shared->number == 1) && (shared->dependencies[0]->count == 1));
@@ -423,7 +425,7 @@ int main(int argc, char** argv)
   // with the last outside reference
 
   snprintf(other, sizeof(other), "%s/D.dll", argv[1]);
-  shared = LoadLibrary(other, NULL, Report);
+  shared = LoadLibrary(other, NULL);
   CHECK(shared != NULL);
   CHECK(GetProcAddress(shared, "Loop") == NULL);
   {
@@ -444,8 +446,8 @@ int main(int argc, char** argv)
 
     snprintf(other, sizeof(other), "%s/B.dll", argv[1]);                         // 6a pointed it to D.dll
 
-    module = LoadLibrary(path, NULL, Report);
-    shared = LoadLibrary(other, NULL, Report);
+    module = LoadLibrary(path, NULL);
+    shared = LoadLibrary(other, NULL);
     CHECK(((UnaryFunction)GetProcAddress(module, "TwiceByOrdinal"))(21) == 42);        // import B#1 = Add
     CHECK(GetProcAddress(shared, LIBRARY_ORDINAL(1)) == GetProcAddress(shared, "Add"));
     CHECK(GetProcAddress(shared, LIBRARY_ORDINAL(99)) == NULL);
@@ -458,7 +460,7 @@ int main(int argc, char** argv)
     const struct LibraryImport imports[] = { { "GetCurrentProcessId", (void*)FakeProcessId }, { NULL, NULL } };
     const struct LibraryProvider providers[] = { { "KERNEL32.dll", imports, NULL }, { NULL, NULL, NULL } };
     int before = warnings;
-    struct Module* again = LoadLibrary(path, providers, Report);
+    struct Module* again = LoadLibrary(path, providers);
     CHECK(again == module);
     CHECK(warnings == before + 1);
     CHECK(((IdentifierFunction)GetProcAddress(again, "Pid"))() == getpid());
@@ -484,7 +486,7 @@ int main(int argc, char** argv)
   {
     char delayed[4096];
     snprintf(delayed, sizeof(delayed), "%s/F.dll", argv[1]);
-    module = LoadLibrary(delayed, NULL, Report);
+    module = LoadLibrary(delayed, NULL);
     CHECK(module != NULL);
     CHECK(((UnaryFunction)GetProcAddress(module, "DelayedTwice"))(5) == 10);
     CHECK(*(uint64_t*)GetProcAddress(module, "DelayHandle") != 0);
@@ -500,17 +502,17 @@ int main(int argc, char** argv)
     snprintf(first, sizeof(first), "%s/G.dll", argv[1]);
     snprintf(second, sizeof(second), "%s/H.dll", argv[1]);
 
-    module = LoadLibrary(first, NULL, Report);
+    module = LoadLibrary(first, NULL);
     CHECK((module != NULL) && (module->base == (uint8_t*)0x200000000ULL));
     CHECK(((IdentifierFunction)GetProcAddress(module, "Answer"))() == 42);
     CHECK(*(void**)GetProcAddress(module, "Self") == GetProcAddress(module, "Answer"));
 
     int before = errors;
-    CHECK(LoadLibrary(second, NULL, Report) == NULL);
+    CHECK(LoadLibrary(second, NULL) == NULL);
     CHECK(errors == before + 1);
     FreeLibrary(module);
 
-    module = LoadLibrary(second, NULL, Report);
+    module = LoadLibrary(second, NULL);
     CHECK((module != NULL) && (module->base == (uint8_t*)0x200000000ULL));
     FreeLibrary(module);
   }
@@ -523,7 +525,7 @@ int main(int argc, char** argv)
     static const uint8_t pattern[] = { 0xb8, 0x07, 0x00, 0x00, 0x00, 0xc3 };
     static const uint8_t replacement[] = { 0xb8, 0x08, 0x00, 0x00, 0x00, 0xc3 };
     snprintf(small, sizeof(small), "%s/S.dll", argv[1]);
-    module = LoadLibrary(small, NULL, Report);
+    module = LoadLibrary(small, NULL);
     CHECK((module != NULL) && (module->flat == 1));
     CHECK(((IdentifierFunction)GetProcAddress(module, "Seven"))() == 7);
     CHECK(PatchLibrary(module, pattern, replacement, sizeof(pattern)) == 1);
@@ -541,12 +543,12 @@ int main(int argc, char** argv)
     mkdir(directory, 0755);
     CHECK(CopyFile(other, copy) == 0);
 
-    shared = LoadLibrary(other, NULL, Report);
+    shared = LoadLibrary(other, NULL);
     int before = warnings;
-    module = LoadLibrary(copy, NULL, Report);
+    module = LoadLibrary(copy, NULL);
     CHECK((module != NULL) && (module != shared));
     CHECK(warnings == before + 1);
-    struct Module* again = LoadLibrary(other, NULL, Report);
+    struct Module* again = LoadLibrary(other, NULL);
     CHECK(again == shared);
     FreeLibrary(again);
     FreeLibrary(module);
@@ -560,7 +562,7 @@ int main(int argc, char** argv)
     char teb[4096];
     int local = 0;
     snprintf(teb, sizeof(teb), "%s/T.dll", argv[1]);
-    module = LoadLibrary(teb, NULL, Report);
+    module = LoadLibrary(teb, NULL);
     CHECK(module != NULL);
 
     GetSelfFunction = (void* (LIBRARY_ABI *)())GetProcAddress(module, "GetSelf");
@@ -601,7 +603,7 @@ int main(int argc, char** argv)
   {
     char teb[4096];
     snprintf(teb, sizeof(teb), "%s/T.dll", argv[1]);
-    module = LoadLibrary(teb, NULL, Report);
+    module = LoadLibrary(teb, NULL);
     CHECK(PrepareLibraryThread() == 0);
 
     void (LIBRARY_ABI *setError)(uint32_t) = (void (LIBRARY_ABI *)(uint32_t))FindLibraryImport("KERNEL32.dll", "SetLastError")->function;
@@ -641,7 +643,7 @@ int main(int argc, char** argv)
     pthread_create(&worker, NULL, TlsThread, result);
 
     snprintf(path, sizeof(path), "%s/U.dll", argv[1]);
-    module = LoadLibrary(path, test, Report);
+    module = LoadLibrary(path, test);
     CHECK((module != NULL) && (module->slot >= 0));
     GetTlsFunction = (uint64_t (LIBRARY_ABI *)())GetProcAddress(module, "GetTls");
     SetTlsFunction = (void (LIBRARY_ABI *)(uint64_t))GetProcAddress(module, "SetTls");
@@ -665,7 +667,7 @@ int main(int argc, char** argv)
 
     char other[4096];
     snprintf(other, sizeof(other), "%s/W.dll", argv[1]);
-    struct Module* dependent = LoadLibrary(other, test, Report);
+    struct Module* dependent = LoadLibrary(other, test);
     CHECK((dependent != NULL) && (dependent->number == 1) && (dependent->dependencies[0] == module));
     CHECK(AttachLibrary(dependent) == 0);
     CHECK((FindNote(1, 1) >= 0) && (FindNote(2, 1) > FindNote(1, 1)) && (FindNote(3, 1) > FindNote(2, 1)));  // U callback, U DllMain, W DllMain
@@ -693,7 +695,7 @@ int main(int argc, char** argv)
     // DllMain returning FALSE
 
     snprintf(other, sizeof(other), "%s/V.dll", argv[1]);
-    module = LoadLibrary(other, test, Report);
+    module = LoadLibrary(other, test);
     int errors_before = errors;
     CHECK(AttachLibrary(module) < 0);
     CHECK((CountNotes(4, 1) == 1) && (module->attached == 0) && (errors == errors_before + 1));
@@ -706,20 +708,20 @@ int main(int argc, char** argv)
   fprintf(stderr, "19. Error codes and unresolved imports (expect reports below)\n");
   {
     char fixed[4096], second[4096];
-    CHECK((LoadLibrary("/nonexistent.dll", NULL, Report) == NULL) && (GetLibraryLastError() == LIBRARY_ERROR_OPEN));
-    CHECK((LoadLibrary(argv[0], NULL, Report) == NULL) && (GetLibraryLastError() == LIBRARY_ERROR_FORMAT));
+    CHECK((LoadLibrary("/nonexistent.dll", NULL) == NULL) && (GetLibraryLastError() == LIBRARY_ERROR_OPEN));
+    CHECK((LoadLibrary(argv[0], NULL) == NULL) && (GetLibraryLastError() == LIBRARY_ERROR_FORMAT));
     snprintf(fixed, sizeof(fixed), "%s/G.dll", argv[1]);
     snprintf(second, sizeof(second), "%s/H.dll", argv[1]);
-    struct Module* first = LoadLibrary(fixed, NULL, Report);
+    struct Module* first = LoadLibrary(fixed, NULL);
     CHECK((first != NULL) && (GetLibraryLastError() == LIBRARY_ERROR_NONE));
-    CHECK((LoadLibrary(second, NULL, Report) == NULL) && (GetLibraryLastError() == LIBRARY_ERROR_IMAGE_BASE));
+    CHECK((LoadLibrary(second, NULL) == NULL) && (GetLibraryLastError() == LIBRARY_ERROR_IMAGE_BASE));
     CHECK(strcmp(GetLibraryErrorText(LIBRARY_ERROR_IMAGE_BASE), "stripped relocations and the ImageBase is taken") == 0);
     FreeLibrary(first);
 
     // A.dll: B!Nope and B!#99 are not exported by B
     struct UnresolvedList found = { 0 };
     snprintf(path, sizeof(path), "%s/A.dll", argv[1]);
-    module = LoadLibrary(path, NULL, Report);
+    module = LoadLibrary(path, NULL);
     size_t total = GetLibraryUnresolvedImports(module, (LibraryImportCallback)NULL, NULL);
     GetLibraryUnresolvedImports(module, CollectUnresolved, &found);
     CHECK((total == 2) && (found.count == 2) && (strcmp(found.names[0], "B.dll!Nope") == 0) && (strcmp(found.names[1], "B.dll!#") == 0));
@@ -734,10 +736,10 @@ int main(int argc, char** argv)
     char fixed[4096], second[4096];
     snprintf(path, sizeof(path), "%s/A.dll", argv[1]);
     RegisterLibraryObserver(&Observer);
-    module = LoadLibrary(path, NULL, Report);
+    module = LoadLibrary(path, NULL);
     CHECK((module != NULL) && (Published == 3) && (Withdrawn == 0) && (module->published == 1));
     CHECK((strstr(Events, "+B.dll ") != NULL) && (strstr(Events, "+C.dll ") != NULL) && (strstr(Events, "+A.dll ") == Events + 14));
-    CHECK(LoadLibrary(path, NULL, Report) == module);                                     // shared: no new event
+    CHECK(LoadLibrary(path, NULL) == module);                                     // shared: no new event
     CHECK(Published == 3);
     FreeLibrary(module);
     CHECK(Withdrawn == 0);
@@ -751,8 +753,8 @@ int main(int argc, char** argv)
 
     snprintf(fixed, sizeof(fixed), "%s/G.dll", argv[1]);
     snprintf(second, sizeof(second), "%s/H.dll", argv[1]);
-    struct Module* first = LoadLibrary(fixed, NULL, Report);
-    CHECK((LoadLibrary(second, NULL, Report) == NULL) && (Published == 7));                  // H.dll failed: not published
+    struct Module* first = LoadLibrary(fixed, NULL);
+    CHECK((LoadLibrary(second, NULL) == NULL) && (Published == 7));                  // H.dll failed: not published
     FreeLibrary(first);
     CHECK(Withdrawn == 7);
     UnregisterLibraryObserver(&Observer);
@@ -761,7 +763,7 @@ int main(int argc, char** argv)
     // Memory from an observer: given back when the module goes away and when a load fails after mapping, never for
     // images with stripped relocations
     RegisterLibraryObserver(&Mapper);
-    module = LoadLibrary(path, NULL, Report);
+    module = LoadLibrary(path, NULL);
     CHECK((module != NULL) && (Mapped == 3) && (module->mapper == &Mapper) && (((UnaryFunction)GetProcAddress(module, "Twice"))(21) == 42));
     FreeLibrary(module);
     CHECK(Unmapped == 3);
@@ -779,10 +781,10 @@ int main(int argc, char** argv)
       fwrite(data, 1, length, file);
       fclose(file);
     }
-    CHECK((LoadLibrary(broken, NULL, Report) == NULL) && (Mapped == 4) && (Unmapped == 4));    // sections out of the file
+    CHECK((LoadLibrary(broken, NULL) == NULL) && (Mapped == 4) && (Unmapped == 4));    // sections out of the file
     unlink(broken);
 
-    first = LoadLibrary(fixed, NULL, Report);
+    first = LoadLibrary(fixed, NULL);
     CHECK((first != NULL) && (first->mapper == NULL) && (Mapped == 4));
     FreeLibrary(first);
     UnregisterLibraryObserver(&Mapper);
@@ -791,8 +793,18 @@ int main(int argc, char** argv)
   // 7. Not a PE file
 
   fprintf(stderr, "7. Errors (expect reports below)\n");
-  CHECK(LoadLibrary(argv[0], NULL, Report) == NULL);
-  CHECK(LoadLibrary("/nonexistent.dll", NULL, Report) == NULL);
+  CHECK(LoadLibrary(argv[0], NULL) == NULL);
+  CHECK(LoadLibrary("/nonexistent.dll", NULL) == NULL);
+
+  // NULL turns reports off
+
+  {
+    int before = errors;
+    SetLibraryReport(NULL);
+    CHECK((LoadLibrary("/nonexistent.dll", NULL) == NULL) && (errors == before));
+    SetLibraryReport(Report);
+    CHECK((LoadLibrary("/nonexistent.dll", NULL) == NULL) && (errors == before + 1));
+  }
 
   printf("LoadLibrary: %d checks, %d failures\n", checks, failures);
   return failures ? EXIT_FAILURE : EXIT_SUCCESS;

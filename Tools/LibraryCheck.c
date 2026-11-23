@@ -219,7 +219,9 @@ int main(int argc, char** argv)
 
   printf("DLL:          %s\n", path);
 
-  if ((image = LoadLibrary(path, NULL, Report)) == NULL)
+  SetLibraryReport(Report);
+
+  if ((image = LoadLibrary(path, NULL)) == NULL)
   {
     int error = GetLibraryLastError();
 

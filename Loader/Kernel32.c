@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#define LIBRARY_PRIVATE
 
 #include "LoadLibrary.h"
 
@@ -555,7 +556,7 @@ static int32_t LIBRARY_ABI UnhandledExceptionFilter(void* information)
 static void LIBRARY_ABI __attribute__((noreturn)) ExitProcess(uint32_t code)
 {
   // The CRT calls it on a fatal error: the DLL must not end the host process quietly
-  dprintf(STDERR_FILENO, "PE image called ExitProcess(%u), aborting\n", code);
+  LibraryReport(LOG_CRIT, "PE image called ExitProcess(%u), aborting\n", code);
   abort();
 }
 
@@ -564,7 +565,7 @@ static int32_t LIBRARY_ABI TerminateProcess(void* process, uint32_t code)
   if (process != GetCurrentProcess())
     return 0;
 
-  dprintf(STDERR_FILENO, "PE image called TerminateProcess(%u), aborting\n", code);
+  LibraryReport(LOG_CRIT, "PE image called TerminateProcess(%u), aborting\n", code);
   abort();
 }
 

@@ -108,8 +108,10 @@ int main(int argc, char** argv)
     return 2;
   }
 
+  SetLibraryReport(Report);
+
   snprintf(path, sizeof(path), "%s/X.dll", argv[1]);
-  image = LoadLibrary(path, NULL, Report);
+  image = LoadLibrary(path, NULL);
   CHECK((image != NULL) && (image->mapper != NULL) && (PrepareLibraryThread() == 0));
   if (image == NULL)
     return EXIT_FAILURE;
@@ -177,21 +179,21 @@ int main(int argc, char** argv)
   // Images inside the objects work: dependencies, a forward, SectionAlignment below the page size
 
   snprintf(path, sizeof(path), "%s/A.dll", argv[1]);
-  other = LoadLibrary(path, NULL, Report);
+  other = LoadLibrary(path, NULL);
   CHECK((other != NULL) && (other->mapper != NULL) && (((UnaryFunction)GetProcAddress(other, "Twice"))(21) == 42) &&
         (((UnaryFunction)GetProcAddress(other, "Square"))(7) == 49));
   CHECK(strcmp(GetName(GetProcAddress(other, "Twice")), "Twice") == 0);
   FreeLibrary(other);
 
   snprintf(path, sizeof(path), "%s/S.dll", argv[1]);
-  other = LoadLibrary(path, NULL, Report);
+  other = LoadLibrary(path, NULL);
   CHECK((other != NULL) && (other->mapper != NULL) && (((NullaryFunction)GetProcAddress(other, "Seven"))() == 7));
   FreeLibrary(other);
 
   // An image with stripped relocations needs its ImageBase: the loader maps it
 
   snprintf(path, sizeof(path), "%s/G.dll", argv[1]);
-  other = LoadLibrary(path, NULL, Report);
+  other = LoadLibrary(path, NULL);
   CHECK((other != NULL) && (other->mapper == NULL) && (((NullaryFunction)GetProcAddress(other, "Answer"))() == 42));
   FreeLibrary(other);
 

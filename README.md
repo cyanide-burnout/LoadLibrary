@@ -46,7 +46,8 @@ unexpected call is never silent.
   code pages, a few stubs);
 - error codes for failures, a list of unresolved imports, names for addresses
   inside DLLs (`A.dll+0x1003 (Twice+0x3)`) that are safe in a fault handler;
-- messages through a function with the signature of `syslog(3)`;
+- messages to stderr, or through one process-wide function with the signature
+  of `syslog(3)` set by `SetLibraryReport()`;
 - observers of loads and unloads, and two of them on top: `FrameBridge.c`
   translates the `.pdata` of DLLs into DWARF CFI for libgcc and libunwind, so
   backtraces of fault handlers pass through DLL frames, epilogues included;
@@ -79,7 +80,9 @@ Using it in a program:
 
 typedef int (LIBRARY_ABI *Function)(int value1, int value2);
 
-struct Module* image = LoadLibrary("Library.dll", NULL, syslog);
+SetLibraryReport(syslog);       // optional: stderr by default, NULL turns messages off
+
+struct Module* image = LoadLibrary("Library.dll", NULL);
 if (image == NULL)
   fprintf(stderr, "%s\n", GetLibraryErrorText(GetLibraryLastError()));
 

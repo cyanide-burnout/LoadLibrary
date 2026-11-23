@@ -8,7 +8,7 @@ Files:
 
 | File | What |
 |---|---|
-| `Loader/LoadLibrary.h` | API: `LoadLibrary`, `GetProcAddress` (also by `LIBRARY_ORDINAL`), `FreeLibrary`, `PatchLibrary`, `PrepareLibraryThread`, `AttachLibrary`, `GetLibraryLastError`, `GetLibraryUnresolvedImports`, `GetLibraryAddressName`, providers (`LIBRARY_PROVIDER`, `LIBRARY_IMPORT`, `RegisterLibraryProvider`, `FindLibraryImport`), observers (`LIBRARY_OBSERVER`, `RegisterLibraryObserver`) |
+| `Loader/LoadLibrary.h` | API: `LoadLibrary`, `GetProcAddress` (also by `LIBRARY_ORDINAL`), `FreeLibrary`, `PatchLibrary`, `PrepareLibraryThread`, `AttachLibrary`, `GetLibraryLastError`, `GetLibraryUnresolvedImports`, `GetLibraryAddressName`, `SetLibraryReport`, providers (`LIBRARY_PROVIDER`, `LIBRARY_IMPORT`, `RegisterLibraryProvider`, `FindLibraryImport`), observers (`LIBRARY_OBSERVER`, `RegisterLibraryObserver`) |
 | `Loader/LoadLibrary.c` | Loader: mapping, relocations, imports, exports, protections, TEB, TLS, registries of providers and modules |
 | `Loader/Kernel32.c` | KERNEL32.dll functions on top of Linux, the provider registers itself (no header: nothing refers to it) |
 | `Loader/FrameBridge.c` | Optional observer: unwind information of DLLs (`.pdata`) translated into DWARF CFI for libgcc and libunwind, so traces pass through DLL frames |
@@ -107,7 +107,7 @@ To see on which side a DLL is, run the tools of Assessing a new DLL below:
    4. a 48-byte thunk `mov rcx, <name>; mov rdx, <module>; mov r8, <image>;
       jmp [rip]; <HandleUnresolvedImport>`. Calling it reports
       `PE image A.dll called unsupported import B.dll!Nope, aborting`
-      (`B.dll!#99` for an ordinal) through the report of the image, and
+      (`B.dll!#99` for an ordinal) through the report function, and
       aborts.
 
    An entry with `function == NULL` in step 1 or 2 forbids the import (step
@@ -117,8 +117,12 @@ To see on which side a DLL is, run the tools of Assessing a new DLL below:
    called.
 
    An unexpected call is therefore never silent and never undefined.
-   Messages go through `LibraryReport`, which has the signature of
-   `syslog(3)`: `syslog` itself can be passed, or any function like it.
+   Messages of the loader and of both bridges go to one process-wide
+   function set by `SetLibraryReport()`, which has the signature of
+   `syslog(3)`: `syslog` itself can be passed, or any function like it. By
+   default they go to stderr, NULL turns them off. The parts of
+   the loader see the current function as `LibraryReport`, declared under
+   `LIBRARY_PRIVATE` only.
 7. **Protections.** Headers get R, and each section gets its own R/W/X from
    its characteristics. This happens inside `LoadLibrary`, because
    dependencies have no caller that could do it. An image with SectionAlignment
@@ -476,7 +480,7 @@ static const struct LibraryProvider Providers[] =
   { NULL,           NULL,      NULL }
 };
 
-image = LoadLibrary(path, Providers, report);
+image = LoadLibrary(path, Providers);
 ```
 
 Module names are compared case-insensitively.

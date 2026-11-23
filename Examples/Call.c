@@ -2,7 +2,7 @@
 //
 //   call [--attach] <dll> <export> <value1> <value2>
 //
-// Messages of the loader go to syslog(3), which has the signature of LibraryReport; LOG_PERROR copies them to stderr
+// Messages of the loader go to syslog(3), which has the signature of LibraryReportFunction; LOG_PERROR copies them to stderr
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,8 +28,9 @@ int main(int argc, char** argv)
   }
 
   openlog("call", LOG_PERROR, LOG_USER);
+  SetLibraryReport(syslog);
 
-  if ((image = LoadLibrary(argv[1 + attach], NULL, syslog)) == NULL)
+  if ((image = LoadLibrary(argv[1 + attach], NULL)) == NULL)
   {
     fprintf(stderr, "LoadLibrary: %s\n", GetLibraryErrorText(GetLibraryLastError()));
     return 1;

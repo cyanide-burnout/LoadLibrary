@@ -27,6 +27,7 @@
 // the loader, in the opposite order)
 
 #define _GNU_SOURCE
+#define LIBRARY_PRIVATE
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -556,7 +557,7 @@ static int MakeObject(struct Module* image, struct File* file)
 
   if ((MakeLibraryFrames != NULL) &&
       ((frames = MakeLibraryFrames(image, ResolveFile, file, memory + places[4], &extent, &entries, &number)) == NULL))
-    image->report(LOG_WARNING, "SymbolBridge could not get unwind information of PE image %s from FrameBridge\n", image->name);
+    LibraryReport(LOG_WARNING, "SymbolBridge could not get unwind information of PE image %s from FrameBridge\n", image->name);
 
   places[5] = (places[4] + extent + 7) & ~7;
   total     = places[5] + ((frames != NULL) ? 12 + 8 * number : 0);
@@ -788,7 +789,7 @@ static void Map(struct Module* image)
 
   if ((wrapper->descriptor = MakeObject(image, &file)) < 0)
   {
-    image->report(LOG_WARNING, "SymbolBridge could not make an ELF object for PE image %s\n", image->name);
+    LibraryReport(LOG_WARNING, "SymbolBridge could not make an ELF object for PE image %s\n", image->name);
     free(wrapper);
     return;
   }
@@ -799,7 +800,7 @@ static void Map(struct Module* image)
   if (((wrapper->handle = dlopen(path, RTLD_NOW | RTLD_LOCAL)) == NULL) ||
       (dlinfo(wrapper->handle, RTLD_DI_LINKMAP, &map) != 0))
   {
-    image->report(LOG_WARNING, "SymbolBridge could not open the ELF object of PE image %s: %s\n", image->name, dlerror());
+    LibraryReport(LOG_WARNING, "SymbolBridge could not open the ELF object of PE image %s: %s\n", image->name, dlerror());
 
     if (wrapper->handle != NULL)
       dlclose(wrapper->handle);

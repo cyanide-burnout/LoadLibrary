@@ -205,8 +205,10 @@ int main(int argc, char** argv)
   expected = 1;
 #endif
 
+  SetLibraryReport(Report);
+
   snprintf(path, sizeof(path), "%s/X.dll", argv[1]);
-  Image = LoadLibrary(path, NULL, Report);
+  Image = LoadLibrary(path, NULL);
   CHECK((Image != NULL) && (PrepareLibraryThread() == 0));
   if (Image == NULL)
     return EXIT_FAILURE;
