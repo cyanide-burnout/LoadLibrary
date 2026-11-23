@@ -191,11 +191,11 @@ static void DiscardReport(int priority, const char* format, ...)
 
 }
 
-LibraryReportFunction LibraryReport = WriteReport;
+_Atomic(LibraryReportFunction) LibraryReport = WriteReport;
 
 void SetLibraryReport(LibraryReportFunction function)
 {
-  __atomic_store_n(&LibraryReport, function ? function : DiscardReport, __ATOMIC_RELEASE);
+  atomic_store_explicit(&LibraryReport, function ? function : DiscardReport, memory_order_release);
 }
 
 // One recursive lock for both registries: LoadLibrary() loads dependencies recursively
@@ -245,7 +245,7 @@ static pthread_once_t LibraryOnce = PTHREAD_ONCE_INIT;
 
 static struct Module* Slots[TLS_SLOT_COUNT];      // Owners of TLS indexes
 static uint64_t Serial = 0;                       // Serial numbers of loads and attachments
-static uint32_t Generation = 1;                   //
+static _Atomic(uint32_t) Generation = 1;          //
 
 #define EXIT_FUNCTION_COUNT               8
 
@@ -322,7 +322,7 @@ static void SynchronizeThread()
       NotifyModule(image, DLL_THREAD_ATTACH);
 
   ThreadSerial     = Serial;
-  ThreadGeneration = Generation;
+  ThreadGeneration = atomic_load_explicit(&Generation, memory_order_acquire);
 }
 
 static void ReleaseTEB(void* argument)
@@ -404,7 +404,7 @@ int PrepareLibraryThread()
   size_t size;
 
   if ((LibraryTEB != NULL) &&
-      (ThreadGeneration == __atomic_load_n(&Generation, __ATOMIC_ACQUIRE)))
+      (ThreadGeneration == atomic_load_explicit(&Generation, memory_order_acquire)))
     return 0;
 
   pthread_once(&LibraryOnce, InitializeEnvironment);
@@ -475,7 +475,7 @@ int PrepareLibraryThread()
 
 static void ChangeEnvironment()
 {
-  __atomic_add_fetch(&Generation, 1, __ATOMIC_RELEASE);
+  atomic_fetch_add_explicit(&Generation, 1, memory_order_release);
 }
 
 // Target of all unresolved imports, ms_abi since it is called from the Windows code

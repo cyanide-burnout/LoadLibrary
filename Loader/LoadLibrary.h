@@ -39,8 +39,9 @@ typedef void (*LibraryReportFunction)(int priority, const char* format, ...);
 void SetLibraryReport(LibraryReportFunction function);
 
 #ifdef LIBRARY_PRIVATE
-// The current function, never NULL: parts of the loader call it directly
-extern LibraryReportFunction LibraryReport;
+// The current function, never NULL: parts of the loader call it directly (C only, a call is an atomic load)
+#include <stdatomic.h>
+extern _Atomic(LibraryReportFunction) LibraryReport;
 #endif
 
 // Copy of a string by malloc() called directly from the module, use it instead of strdup()
